@@ -1,0 +1,189 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}@font-face{font-family:Heebo;src:url(assets/Heebo-Bold.ttf);font-weight:700}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// Why are airplane windows never square? One element, many jobs: the cyan stress lines (flow → pile-up → crack → hold together).
+import { makeToon, toon } from './toon.js';
+import { THREE, RoundedBoxGeometry, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, rimP, rimC, ui, canvasTex, txt } from './common.js';
+import { B, v3, easeB, installTimeline, stage, glowSprite, camAt, line, superAt, hook, counter, foot, signature, sigEvents, filmLook, eventsHelper, CY, RD, AM } from './hit.js';
+
+bloom.threshold = 0.82; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.5; key.castShadow = false;
+stage();
+const FY = 1.6, R = 1.0, WX = 1.0, WY = 1.75, WZ = Math.sqrt(R * R - (WY - FY) ** 2), WW = 0.22, WH = 0.32;
+const ws = (n, s = 1) => { // superellipse window outline (n=2.4 airliner oval, n=12 square-ish)
+  const pts = []; for (let i = 0; i <= 64; i++) { const a = i / 64 * Math.PI * 2, c = Math.cos(a), s2 = Math.sin(a); pts.push([Math.sign(c) * Math.abs(c) ** (2 / n) * WW / 2 * s, Math.sign(s2) * Math.abs(s2) ** (2 / n) * WH / 2 * s]); } return pts; };
+
+// ---------- the plane (x-ray): two halves so it can split at the hero window ----------
+const glassMat = () => new THREE.MeshPhysicalMaterial({ color: '#0d1640', metalness: 0.2, roughness: 0.25, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false, emissive: '#0a1030', emissiveIntensity: 0.6 });
+const gridMat = new THREE.LineBasicMaterial({ color: '#3EE6FF', transparent: true, opacity: 0.22, toneMapped: false });
+function bodySeg(x0, x1) { const g = new THREE.Group(); const L = x1 - x0;
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(R, R, L, 56, 1, true), glassMat()); m.rotation.z = Math.PI / 2; m.position.x = (x0 + x1) / 2; g.add(m);
+  const pts = []; for (let x = Math.ceil(x0 / 0.5) * 0.5; x <= x1 + 1e-6; x += 0.5) for (let i = 0; i < 48; i++) { const a0 = i / 48 * Math.PI * 2, a1 = (i + 1) / 48 * Math.PI * 2; pts.push(x, Math.cos(a0) * R, Math.sin(a0) * R, x, Math.cos(a1) * R, Math.sin(a1) * R); }
+  for (let i = 0; i < 24; i++) { const a = i / 24 * Math.PI * 2; pts.push(x0, Math.cos(a) * R, Math.sin(a) * R, x1, Math.cos(a) * R, Math.sin(a) * R); }
+  const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)); const l = new THREE.LineSegments(lg, gridMat); g.add(l); return g; }
+function winMesh(n, lit = 0) { const t = canvasTex(128, 192); const draw = (n2, hot) => t.draw((x, w, h) => { x.clearRect(0, 0, w, h); const p = ws(n2); x.beginPath(); p.forEach(([a, b], i) => { const X = w / 2 + a / (WW / 2) * (w / 2 - 8), Y = h / 2 - b / (WH / 2) * (h / 2 - 8); i ? x.lineTo(X, Y) : x.moveTo(X, Y); }); x.closePath();
+    const g = x.createLinearGradient(0, 0, w, h); g.addColorStop(0, '#1d3a8a'); g.addColorStop(1, '#0a1240'); x.fillStyle = g; x.fill(); x.lineWidth = 9; x.strokeStyle = hot > 0 ? `rgb(${lerp(62, 255, hot)},${lerp(230, 59, hot)},${lerp(255, 92, hot)})` : '#3EE6FF'; x.stroke(); });
+  draw(n, 0); const m = new THREE.Mesh(new THREE.PlaneGeometry(WW + 0.04, WH + 0.06), new THREE.MeshBasicMaterial({ map: t.tex, transparent: true, toneMapped: false, depthWrite: false })); m.userData.draw = draw; return m; }
+const rear = new THREE.Group(), front = new THREE.Group(); scene.add(rear, front);
+const SPLIT = WX + 0.2;
+rear.add(bodySeg(-4.2, SPLIT)); front.add(bodySeg(SPLIT, 4.2));
+// nose + tail
+{ const nose = new THREE.Mesh(new THREE.SphereGeometry(R, 40, 24, 0, Math.PI * 2, 0, Math.PI / 2), glassMat()); nose.rotation.z = -Math.PI / 2; nose.scale.set(1, 1.7, 1); nose.position.x = 4.2; front.add(nose);
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(R, 2.4, 40, 1, true), glassMat()); tail.rotation.z = Math.PI / 2; tail.position.set(-5.4, 0.15, 0); rear.add(tail);
+  const fin = new THREE.Mesh(new RoundedBoxGeometry(1.3, 1.3, 0.06, 2, 0.02), glassMat()); fin.position.set(-5.6, 1.05, 0); fin.rotation.z = 0.5; rear.add(fin);
+  for (const s of [-1, 1]) { const wing = new THREE.Mesh(new RoundedBoxGeometry(1.5, 0.08, 4.4, 2, 0.03), glassMat()); wing.position.set(-1.3, -0.35, s * 2.6); wing.rotation.y = s * 0.45; rear.add(wing);
+    const st = new THREE.Mesh(new RoundedBoxGeometry(0.8, 0.05, 1.4, 2, 0.02), glassMat()); st.position.set(-5.5, 0.2, s * 0.9); st.rotation.y = s * 0.4; rear.add(st); } }
+// windows (the hero window sits at WX; the rest stay round)
+const wins = []; let hero = null;
+for (let x = -0.35; x <= 3.7; x += 0.45) { const w = winMesh(2.4); const isHero = Math.abs(x - WX) < 0.2; const xx = isHero ? WX : x; w.position.set(xx, WY - FY, WZ + 0.004); w.rotation.x = -Math.asin((WY - FY) / R);
+  (xx < SPLIT ? rear : front).add(w); wins.push(w); if (isHero) hero = w; }
+rear.position.y = FY; front.position.y = FY;
+// cabin inside: floor, seats, passenger
+const T = toon;
+{ const floor = new THREE.Mesh(new THREE.BoxGeometry(8, 0.04, 1.5), T('#1a1f4a')); floor.position.set(0, -0.55, 0); rear.add(floor);
+  for (let x = -3.4; x <= 3.4; x += 0.6) { const seat = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.42, 0.34, 2, 0.05), T('#3b3f7a')); seat.position.set(x, -0.33, 0.45); (x < SPLIT ? rear : front).add(seat); } }
+const guy = makeToon('guy'); guy.root.scale.setScalar(0.52); guy.root.position.set(WX - 0.02, -0.18, 0.4); guy.root.rotation.y = 0.15; rear.add(guy.root);
+// pressure: particles + outward arrows (ring at the hero window)
+const NP = 900; const pp = new Float32Array(NP * 3), pseed = []; for (let i = 0; i < NP; i++) { const a = Math.random() * 6.283, r = Math.sqrt(Math.random()) * 0.92, x = -3.6 + Math.random() * 7.4; pseed.push([x, a, r]); }
+const pgeo = new THREE.BufferGeometry(); pgeo.setAttribute('position', new THREE.BufferAttribute(pp, 3)); const pmat = new THREE.PointsMaterial({ color: '#7fdcff', size: 0.035, transparent: true, opacity: 0, depthWrite: false, toneMapped: false, blending: THREE.AdditiveBlending });
+const parts = new THREE.Points(pgeo, pmat); parts.position.y = FY; scene.add(parts);
+const arrows = new THREE.Group(); arrows.position.set(WX + 0.6, FY, 0); scene.add(arrows);
+for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; const c = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.14, 14), new THREE.MeshBasicMaterial({ color: new THREE.Color(AM).multiplyScalar(0.9), toneMapped: false, transparent: true }));
+  c.userData.a = a; arrows.add(c); }
+// crack glow at the split
+const gapGlow = glowSprite('rgba(255,59,92,1)', 1.2, 0); gapGlow.position.set(SPLIT, FY + 0.2, WZ); scene.add(gapGlow);
+
+// ---------- the stress panel: 2D flow field in the plane of the hero window (same window, same frame) ----------
+const PW = 1.25, PX = 1024; const pan = canvasTex(PX, PX);
+const panel = new THREE.Mesh(new THREE.PlaneGeometry(PW, PW), new THREE.MeshBasicMaterial({ map: pan.tex, transparent: true, toneMapped: false, depthWrite: false, opacity: 0 }));
+panel.position.set(WX, WY, WZ + 0.012); panel.rotation.x = -Math.asin((WY - FY) / R); scene.add(panel);
+const A = WW / 2 * PX / PW, Bh = WH / 2 * PX / PW; // window half sizes in panel px
+function rn(X, Y, n) { return Math.pow(Math.abs(X) ** n + Math.abs(Y) ** n, 1 / n); }
+function drawPanel(t, n, crack, hot, fade) {
+  pan.draw((x, w, h) => { x.clearRect(0, 0, w, h);
+    const bg = x.createRadialGradient(w / 2, h / 2, 60, w / 2, h / 2, w * 0.62); bg.addColorStop(0, 'rgba(10,18,60,0.92)'); bg.addColorStop(1, 'rgba(10,18,60,0)'); x.fillStyle = bg; x.fillRect(0, 0, w, h);
+    const cx = w / 2, cy = h / 2, step = 30, lines = [];
+    for (let y0 = -470; y0 <= 470; y0 += step) { if (Math.abs(y0) < 12) continue; const L = [];
+      for (let px = -520; px <= 520; px += 6) { let y = y0; for (let k = 0; k < 8; k++) { const r = Math.max(1.03, rn(px / A, y / Bh, n)); y = y0 / (1 - 1 / (r * r)); }
+        L.push([px, Math.max(-500, Math.min(500, y))]); } lines.push([y0, L]); }
+    // stress lines, coloured by crowding
+    x.lineCap = 'round';
+    for (const [y0, L] of lines) { for (let i = 1; i < L.length; i++) { const [x0, ya] = L[i - 1], [x1, yb] = L[i];
+        const r = rn(x1 / A, yb / Bh, n); const near = Math.exp(-(((r - 1) * 3.2) ** 2)); const cornerness = Math.min(1, Math.abs(Math.abs(x1 / A) - Math.abs(yb / Bh)) < 0.35 ? 1 : 0.2);
+        const k = clamp(near * (n > 3 ? lerp(0.35, 1, clamp((n - 3) / 7)) * (0.4 + 0.6 * cornerness) : 0.35) * hot);
+        const col = k < 0.5 ? `rgba(${lerp(62, 255, k * 2)},${lerp(230, 181, k * 2)},${lerp(255, 71, k * 2)},${0.85 * fade})` : `rgba(255,${lerp(181, 59, (k - 0.5) * 2)},${lerp(71, 92, (k - 0.5) * 2)},${0.95 * fade})`;
+        x.strokeStyle = col; x.lineWidth = 3 + 4 * k; x.beginPath(); x.moveTo(cx + x0, cy - ya); x.lineTo(cx + x1, cy - yb); if (rn(x1 / A, yb / Bh, n) > 1.06 && rn(x0 / A, ya / Bh, n) > 1.06) x.stroke(); } }
+    // moving dashes = flow
+    x.setLineDash([18, 46]); x.lineDashOffset = -t * 140; x.strokeStyle = `rgba(255,255,255,${0.55 * fade})`; x.lineWidth = 3;
+    for (const [y0, L] of lines) { x.beginPath(); let pen = false; L.forEach(([a, b]) => { const ok = rn(a / A, b / Bh, n) > 1.06; if (ok && pen) x.lineTo(cx + a, cy - b); else if (ok) x.moveTo(cx + a, cy - b); pen = ok; }); x.stroke(); } x.setLineDash([]);
+    // hot spots at the corners
+    if (n > 3 && hot > 0) { const s = clamp((n - 3) / 7) * hot; for (const [sx, sy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) { const gx = cx + sx * A * 0.93, gy = cy - sy * Bh * 0.93; const g = x.createRadialGradient(gx, gy, 0, gx, gy, 90); g.addColorStop(0, `rgba(255,59,92,${0.9 * s * fade})`); g.addColorStop(1, 'rgba(255,59,92,0)'); x.fillStyle = g; x.fillRect(gx - 90, gy - 90, 180, 180); } }
+    // the crack from the top-right corner
+    if (crack > 0) { x.strokeStyle = '#ff3b5c'; x.shadowColor = '#ff3b5c'; x.shadowBlur = 24; x.lineWidth = 7; x.beginPath(); let px = cx + A * 0.9, py = cy - Bh * 0.9; x.moveTo(px, py);
+      const segs = 14, len = 380 * crack; for (let i = 1; i <= segs * crack; i++) { px += len / segs * 0.75 + ((i * 37) % 11 - 5) * 2.2; py -= len / segs * 0.62 + ((i * 53) % 13 - 6) * 2.4; x.lineTo(px, py); } x.stroke(); x.shadowBlur = 0; }
+  }); panel.material.opacity = fade; }
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  why: wt(0, 'Why'), are: wt(0, 'are'), airplane: wt(0, 'airplane'), windows: wt(0, 'windows'), never: wt(0, 'never'), square: wt(0, 'square'),
+  l2: L[1].start, pumped: wt(1, 'pumped'), balloon: wt(1, 'balloon'), l3: L[2].start, stretches: wt(2, 'stretches'), stress: wt(2, 'stress'), flows: wt(2, 'flows'),
+  l4: L[3].start, curve: wt(3, 'curve'), smoothly: wt(3, 'smoothly'), l5: L[4].start, sharp: wt(4, 'sharp'), piles: wt(4, 'piles'), spot: wt(4, 'spot'),
+  l6: L[5].start, cracks: wt(5, 'cracks'), metal: wt(5, 'Metal'), l7: L[6].start, nineteen: wt(6, 'nineteen'), two: wt(6, 'two'), broke: wt(6, 'broke'),
+  l8: L[7].start, started: wt(7, 'started'), corner: wt(7, 'corner'), l9: L[8].start, curve2: wt(8, 'curve'), style: wt(8, 'style'), holds: wt(8, 'holds'), together: wt(8, 'together'),
+}), buildCam);
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l5, B.l7, B.l8, B.l9, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+let CK = [];
+const close = (dz, dx = 0, dy = 0) => [WX + dx, WY + dy, WZ + dz];
+function buildCam() { CK = [
+  [-0.2, [-3.6, 2.6, 3.9], [-0.8, 1.85, 0.6]],
+  [1.2, [-1.5, 2.1, 3.0], [0.6, 1.8, 0.8]],
+  [B.slam - 0.05, [0.35, 1.95, 2.35], [WX, WY, WZ]],
+  [B.slam + 0.5, [3.4, 3.0, 4.6], [0.6, 1.5, 0], 'whip'],
+  [B.balloon, [2.6, 2.6, 4.0], [0.8, 1.6, 0]],
+  [B.l3 + 0.55, close(1.75, 0, 0.05), [WX, WY, WZ], 'whip'],
+  [B.l5, close(1.55, 0.02, 0.02), [WX, WY, WZ]],
+  [B.spot, close(1.3, 0.1, 0.08), [WX + 0.05, WY + 0.05, WZ]],
+  [B.metal + 0.3, close(1.2, 0.18, 0.12), [WX + 0.12, WY + 0.1, WZ]],
+  [B.l7 + 0.6, [5.6, 3.7, 7.2], [-0.2, 1.3, 0], 'whip'],
+  [B.broke + 0.9, [4.6, 3.1, 6.0], [0.4, 1.4, 0]],
+  [B.l8 + 0.5, close(1.15, 0.16, 0.12), [WX + 0.12, WY + 0.1, WZ], 'whip'],
+  [B.l9 - 0.05, close(1.35, 0.1, 0.06), [WX + 0.05, WY + 0.05, WZ]],
+  [B.l9 + 0.7, [1.9, 2.25, 3.4], [0.6, 1.7, 0.6], 'whip'],
+  [B.sig - 0.05, [2.6, 2.5, 4.2], [0.6, 1.65, 0.4]],
+  [B.sig + 0.5, close(0.25), [WX, WY, WZ], 'whip'],
+  [B.end + 1, close(0.2), [WX, WY, WZ]],
+]; }
+
+// ---------- per-frame state ----------
+function state(t) {
+  // window shape: oval → snaps square on "square" → back to oval for the explanation → square from "sharp" → oval again at the end
+  let n = 2.4;
+  if (t >= B.square && t < B.slam + 0.4) n = lerp(2.4, 12, easeB(seg(t, B.square, 0.18)));
+  if (t >= B.sharp - 0.1 && t < B.l9 + 0.2) n = lerp(2.4, 12, eio(seg(t, B.sharp - 0.1, 0.45)));
+  if (t >= B.l9 + 0.2) n = lerp(12, 2.4, easeB(seg(t, B.l9 + 0.2, 0.4)));
+  const hot = t >= B.sharp ? clamp((t - B.sharp) / 0.6) : t >= B.square && t < B.slam + 0.4 ? 1 : t >= B.l3 ? 0.35 : 0;
+  let crack = t >= B.cracks - 0.2 && t < B.l9 + 0.2 ? eo(seg(t, B.cracks - 0.2, 0.9)) : 0; if (t >= B.l9 + 0.2) crack = 1 - seg(t, B.l9 + 0.2, 0.3);
+  const fade = t > B.l3 + 0.2 && t < B.l7 + 0.3 ? clamp((t - B.l3 - 0.2) / 0.35) * (1 - seg(t, B.l7 + 0.05, 0.25)) : t > B.l8 + 0.2 && t < B.l9 + 0.75 ? clamp((t - B.l8 - 0.2) / 0.3) * (1 - seg(t, B.l9 + 0.45, 0.3)) : 0;
+  return { n, hot, crack, fade };
+}
+let lastN = -1, lastHot = -1;
+function props(t) {
+  const S = state(t);
+  if (Math.abs(S.n - lastN) > 0.05 || Math.abs(S.hot - lastHot) > 0.05) { hero.userData.draw(S.n, S.n > 3 ? S.hot : 0); lastN = S.n; lastHot = S.hot; }
+  if (S.fade > 0.01) drawPanel(t, S.n, S.crack, Math.max(S.hot, 0.35), S.fade); else panel.material.opacity = 0;
+  // balloon: particles fill, skin breathes, arrows push out
+  const inflate = seg(t, B.l2 - 0.1, 0.8) * (1 - seg(t, B.l3 + 0.2, 0.5)); pmat.opacity = 0.75 * inflate;
+  for (let i = 0; i < NP; i++) { const [x, a, r] = pseed[i]; const rr = r * (0.55 + 0.45 * inflate) + 0.02 * Math.sin(t * 3 + i); pp[i * 3] = x + 0.05 * Math.sin(t * 1.3 + i); pp[i * 3 + 1] = Math.cos(a + t * 0.2) * rr; pp[i * 3 + 2] = Math.sin(a + t * 0.2) * rr; } pgeo.attributes.position.needsUpdate = true;
+  const breathe = 1 + 0.035 * inflate * (0.5 + 0.5 * Math.sin((t - B.l2) * 5)); for (const g of [rear, front]) { g.scale.set(1, breathe, breathe); }
+  arrows.visible = inflate > 0.02; arrows.children.forEach((c, i) => { const a = c.userData.a, rr = 1.12 + 0.08 * Math.sin(t * 5 + i) + 0.1 * inflate; c.position.set(0, Math.cos(a) * rr, Math.sin(a) * rr); c.rotation.set(a, 0, 0); c.material.opacity = inflate; c.scale.setScalar(0.4 + 0.6 * eo(clamp((t - B.pumped + i * 0.03) / 0.3))); });
+  // the split in 1954
+  const sp = eio(seg(t, B.broke - 0.05, 0.9)) * (1 - eio(seg(t, B.l8 - 0.1, 0.45)));
+  front.position.set(sp * 0.35, FY - sp * 0.12, 0); front.rotation.z = -sp * 0.12; rear.rotation.z = sp * 0.05; gapGlow.material.opacity = 0.9 * sp; gapGlow.position.set(SPLIT + sp * 0.15, FY + 0.1, 0.6);
+  // grid flushes red while the plane is in trouble
+  gridMat.color.set(t > B.l7 && t < B.l8 ? '#ff6a80' : '#3EE6FF'); gridMat.opacity = t > B.l7 && t < B.l8 ? 0.3 : 0.22;
+  // passenger
+  const happy = t > B.l9 + 0.3; guy.update(t, { pose: 'sit', mood: happy ? 'happy' : t > B.l7 && t < B.l9 ? 'worried' : 'neutral', headTurn: happy ? -0.35 : 0.0 });
+  return S;
+}
+
+// ---------- type ----------
+function drawType(t) {
+  hook(t, [[['WHY', 'why'], ['ARE', 'are']], [['AIRPLANE', 'airplane'], ['WINDOWS', 'windows']], [['NEVER', 'never'], ['SQUARE?', 'square', RD]]], [430, 610, 790], [200, 140, 160]);
+  superAt(t, 'PRESSURIZED', B.pumped - 0.05, B.balloon - B.pumped, 360, 150, AM);
+  superAt(t, 'LIKE A BALLOON', B.balloon, B.l3 - B.balloon + 0.1, 360, 120);
+  superAt(t, 'STRESS FLOWS', B.stress, B.l4 - B.stress, 330, 150, CY);
+  superAt(t, 'SMOOTH', B.smoothly - 0.05, B.l5 - B.smoothly, 330, 210, CY);
+  superAt(t, 'PILES UP', B.piles, B.l6 - B.piles, 330, 210, RD);
+  superAt(t, 'METAL FATIGUE', B.metal, B.l7 - B.metal, 330, 150, RD);
+  if (t > B.l6 - 0.05 && t < B.metal - 0.05) { // flight counter (illustrative)
+    const k = clamp((t - B.l6) / (B.cracks - B.l6 + 0.3)); const v = Math.floor(1 + 999 * k * k); ui.save(); ui.globalAlpha = clamp((B.metal - 0.05 - t) / 0.12); ui.font = '700 54px Poppins'; ui.textAlign = 'center'; ui.fillStyle = '#c8ceff'; ui.shadowColor = 'rgba(0,0,0,0.8)'; ui.shadowBlur = 14; ui.fillText('FLIGHT', 540, 250); ui.font = '700 170px Poppins'; ui.fillStyle = '#fff'; ui.fillText(String(v).padStart(4, '0'), 540, 390); ui.restore(); }
+  superAt(t, '1954', B.nineteen, B.broke - B.nineteen, 330, 230);
+  superAt(t, 'BROKE APART', B.broke, B.l8 - B.broke, 330, 170, RD);
+  superAt(t, 'WINDOW CORNER', B.corner - 0.2, B.l9 - B.corner + 0.1, 330, 150, RD);
+  superAt(t, 'NOT STYLE', B.style - 0.1, B.holds - B.style + 0.05, 360, 200);
+  if (t > B.holds - 0.1 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) }; line([['IT', B.holds - 0.1], ['HOLDS', B.holds]], 300, 180, t, o); line([['THE', B.holds + 0.25], ['PLANE', B.holds + 0.4, CY], ['TOGETHER', B.together, CY]], 450, 120, t, o); }
+  const S = state(t); if (S.fade > 0.2) foot('Simplified model · stress lines illustrative', S.fade);
+  if (t > B.l7 && t < B.l8 + 0.2) foot('de Havilland Comet 1 accidents, 1954 · source: FAA Lessons Learned', clamp((t - B.l7) / 0.3) * clamp((B.l8 + 0.2 - t) / 0.2));
+}
+
+// ---------- sound cue sheet ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  for (const k of ['why', 'are', 'airplane', 'windows', 'never']) ev(B[k], 'tick', 0.9); ev(B.square, 'pop', 1); ev(B.slam, 'slam', 1.2); ev(B.slam, 'whoosh', 1);
+  ev(B.pumped - 0.05, 'rise', 0.9); ev(B.pumped - 0.05, 'super'); ev(B.balloon, 'super', 0.7);
+  ev(B.l3 - 0.05, 'whoosh'); ev(B.stress, 'super'); ev(B.smoothly - 0.05, 'super', 0.8); ev(B.sharp - 0.1, 'click', 1); ev(B.piles, 'slam', 0.6); ev(B.piles, 'super');
+  for (let i = 0; i < 8; i++) ev(B.l6 + i * (B.cracks - B.l6) / 8, 'tick', 0.5); ev(B.cracks - 0.2, 'rise', 0.8); ev(B.cracks + 0.3, 'slam', 0.7); ev(B.metal, 'super');
+  ev(B.l7 - 0.05, 'whoosh', 1.1); ev(B.nineteen, 'super'); ev(B.broke, 'slam', 1); ev(B.broke, 'super', 0.7);
+  ev(B.l8 - 0.05, 'whoosh'); ev(B.corner - 0.2, 'pop2'); ev(B.corner - 0.2, 'super');
+  ev(B.l9 + 0.2, 'pop', 1); ev(B.style - 0.1, 'super'); ev(B.holds, 'super', 0.7); ev(B.together, 'pop2', 0.8);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.slam, B.broke] }); props(t);
+  bloom.strength = 0.6 + (t > B.slam ? 0.45 * Math.exp(-(t - B.slam) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawType(t); signature(t, 'Simplified model · not an engineering diagram', RD); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>

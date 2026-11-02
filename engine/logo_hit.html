@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}html,body{margin:0;background:#000}</style></head><body>
+<canvas id="c" width="1080" height="1080"></canvas>
+<script>
+const x = document.getElementById('c').getContext('2d');
+function gear(cx, cy, r, teeth, rot, col) { x.save(); x.translate(cx, cy); x.rotate(rot); x.fillStyle = col; x.beginPath();
+  for (let k = 0; k < teeth * 2; k++) { const a0 = k / (teeth * 2) * Math.PI * 2, a1 = (k + 1) / (teeth * 2) * Math.PI * 2, rr = k % 2 ? r : r * 1.16; x.lineTo(Math.cos(a0) * rr, Math.sin(a0) * rr); x.lineTo(Math.cos(a1) * rr, Math.sin(a1) * rr); }
+  x.closePath(); x.fill(); x.fillStyle = 'rgba(3,5,15,0.85)'; x.beginPath(); x.arc(0, 0, r * 0.32, 0, 7); x.fill(); x.restore(); }
+const g = x.createRadialGradient(380, 300, 0, 540, 540, 900); g.addColorStop(0, '#1b1f6e'); g.addColorStop(0.6, '#0a0f3a'); g.addColorStop(1, '#03050f'); x.fillStyle = g; x.fillRect(0, 0, 1080, 1080);
+x.translate(540, 540); const R = 300, open = 1;
+x.save(); x.beginPath(); x.arc(0, 0, R, 0, 7); x.clip(); x.fillStyle = '#070a24'; x.fillRect(-R, -R, 2 * R, 2 * R);
+gear(-75, -50, 140, 14, 0.2, '#7a5cff'); gear(120, 70, 92, 10, 0.5, '#1fb6e0'); gear(-15, 170, 66, 8, 0.1, '#4656d6'); x.restore();
+for (const side of [-1, 1]) { x.save(); x.translate(side * 110, side * 28); x.beginPath(); x.arc(0, 0, R, side < 0 ? Math.PI * 0.5 : -Math.PI * 0.5, side < 0 ? Math.PI * 1.5 : Math.PI * 0.5); x.closePath();
+  const fg = x.createLinearGradient(-R, -R, R, R); fg.addColorStop(0, '#1a2070'); fg.addColorStop(1, '#0d1150'); x.fillStyle = fg; x.fill(); x.strokeStyle = 'rgba(62,230,255,0.9)'; x.lineWidth = 14; x.stroke();
+  for (let k = 0; k < 12; k++) { const an = k / 12 * Math.PI * 2 - Math.PI / 2, cx = Math.cos(an), cy = Math.sin(an); if ((cx < -0.01 && side > 0) || (cx > 0.01 && side < 0)) continue; x.strokeStyle = 'rgba(255,255,255,0.85)'; x.lineWidth = k % 3 ? 8 : 16; x.beginPath(); x.moveTo(cx * R * 0.76, cy * R * 0.76); x.lineTo(cx * R * 0.9, cy * R * 0.9); x.stroke(); }
+  x.restore(); }
+</script></body></html>
