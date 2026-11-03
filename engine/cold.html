@@ -1,0 +1,178 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// Why does your phone die in the cold? One element, many jobs: the phone screen (battery % → x-ray window → voltage trace → black → % again); the ions are the thread.
+import { makeToon } from './toon.js';
+import { THREE, RoundedBoxGeometry, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex } from './common.js';
+import { B, installTimeline, stage, glowSprite, camAt, line, superAt, hook, foot, signature, sigEvents, filmLook, eventsHelper, CY, RD, AM, PU } from './hit.js';
+
+bloom.threshold = 0.82; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.55; key.castShadow = false;
+stage();
+const ICE = '#cfeaff', PX = 0.35, PY = 1.0, PWD = 0.8, PHT = 1.6; // phone centre / size
+const glass = (op = 0.4, col = '#0d1640') => new THREE.MeshPhysicalMaterial({ color: col, metalness: 0.2, roughness: 0.25, transparent: true, opacity: op, side: THREE.DoubleSide, depthWrite: false, emissive: '#0a1030', emissiveIntensity: 0.7 });
+const edge = (g, col = CY, op = 0.6) => new THREE.LineSegments(new THREE.EdgesGeometry(g, 20), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: op, toneMapped: false }));
+
+// ---------- the guy, fixed look ----------
+const guy = makeToon({ skin: '#f2c29b', hair: '#2b1d16', shirt: '#3a6df0', pants: '#1f2547', shoes: '#c94a3a', hairStyle: 'cap' });
+guy.root.position.set(-0.62, 0, 0.35); guy.root.rotation.y = 0.45; scene.add(guy.root);
+{ const scarf = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.05, 10, 30), new THREE.MeshToonMaterial({ color: '#FF3B5C' })); scarf.rotation.x = Math.PI / 2; scarf.position.y = 1.19; guy.body.add(scarf); }
+
+// ---------- the x-ray phone ----------
+const phone = new THREE.Group(); phone.position.set(PX, PY, 0); scene.add(phone);
+{ const g = new RoundedBoxGeometry(PWD, PHT, 0.08, 4, 0.07); phone.add(new THREE.Mesh(g, glass(0.28))); phone.add(edge(g, CY, 0.55)); }
+// battery cell inside (lower part)
+const BY = -0.2, BW = 0.6, BH = 0.9; const cell = new THREE.Group(); cell.position.set(0, BY, 0); phone.add(cell);
+{ const g = new THREE.BoxGeometry(BW, BH, 0.05); cell.add(edge(g, '#9fb4ff', 0.7)); }
+const anode = new THREE.Mesh(new THREE.BoxGeometry(0.05, BH - 0.04, 0.045), new THREE.MeshBasicMaterial({ color: '#7a5cff', toneMapped: false })); anode.position.x = -BW / 2 + 0.04; cell.add(anode);
+const cathode = new THREE.Mesh(new THREE.BoxGeometry(0.05, BH - 0.04, 0.045), new THREE.MeshBasicMaterial({ color: '#2f6bff', toneMapped: false })); cathode.position.x = BW / 2 - 0.04; cell.add(cathode);
+const elyteM = new THREE.MeshBasicMaterial({ color: '#0b2a6b', transparent: true, opacity: 0.35, depthWrite: false, toneMapped: false });
+const elyte = new THREE.Mesh(new THREE.PlaneGeometry(BW - 0.13, BH - 0.04), elyteM); elyte.position.z = -0.02; cell.add(elyte);
+// frost crystals (deterministic branches)
+const fz = canvasTex(512, 768);
+fz.draw((x, w, h) => { x.clearRect(0, 0, w, h); let s = 11; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  x.strokeStyle = 'rgba(230,245,255,0.9)'; x.lineCap = 'round';
+  const br = (px, py, a, len, d) => { if (d > 4 || len < 6) return; const qx = px + Math.cos(a) * len, qy = py + Math.sin(a) * len; x.lineWidth = Math.max(1, 5 - d); x.beginPath(); x.moveTo(px, py); x.lineTo(qx, qy); x.stroke(); br(qx, qy, a - 0.6 - r() * 0.3, len * 0.62, d + 1); br(qx, qy, a + 0.6 + r() * 0.3, len * 0.62, d + 1); br(qx, qy, a, len * 0.7, d + 1); };
+  for (let i = 0; i < 16; i++) { const cx = r() * w, cy = r() * h; for (let k = 0; k < 6; k++) br(cx, cy, k / 6 * Math.PI * 2 + r(), 28 + r() * 30, 0); } });
+const frost = new THREE.Mesh(new THREE.PlaneGeometry(BW - 0.13, BH - 0.04), new THREE.MeshBasicMaterial({ map: fz.tex, transparent: true, opacity: 0, depthWrite: false, toneMapped: false })); frost.position.z = 0.026; cell.add(frost);
+// ions
+const NI = 34, ions = []; { let s = 5; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < NI; i++) { const m = new THREE.Mesh(new THREE.SphereGeometry(0.02, 12, 8), new THREE.MeshBasicMaterial({ color: CY, toneMapped: false })); m.userData = { ph: r(), y: (r() - 0.5) * (BH - 0.12), z: (r() - 0.5) * 0.02, w: r() * 6 }; cell.add(m); ions.push(m); } }
+const ionGlow = glowSprite('rgba(62,230,255,1)', 1.1, 0.25); ionGlow.position.set(0, BY, -0.05); phone.add(ionGlow);
+const warmGlow = glowSprite('rgba(255,181,71,1)', 3.2, 0); warmGlow.position.set(PX, PY - 0.1, -0.4); scene.add(warmGlow);
+// the screen: one element, many jobs
+const SC = canvasTex(800, 1600); const screen = new THREE.Mesh(new THREE.PlaneGeometry(PWD - 0.06, PHT - 0.06), new THREE.MeshBasicMaterial({ map: SC.tex, transparent: true, toneMapped: false, depthWrite: false })); screen.position.z = 0.045; phone.add(screen);
+
+// ---------- snow ----------
+const NS = 420, sPos = new Float32Array(NS * 3), sSeed = []; { let s = 3; const r = () => (s = (s * 16807) % 2147483647) / 2147483647; for (let i = 0; i < NS; i++) sSeed.push([r() * 6 - 3, r() * 3.2, r() * 4 - 2.4, 0.18 + r() * 0.2, r() * 6]); }
+const snowG = new THREE.BufferGeometry(); snowG.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
+const snow = new THREE.Points(snowG, new THREE.PointsMaterial({ color: '#e6f0ff', size: 0.02, transparent: true, opacity: 0.85, depthWrite: false })); scene.add(snow);
+function snowAt(t, a) { for (let i = 0; i < NS; i++) { const [x, y, z, v, w] = sSeed[i]; sPos[i * 3] = x + Math.sin(t * 0.8 + w) * 0.08; sPos[i * 3 + 1] = ((y - t * v) % 3.2 + 3.2) % 3.2; sPos[i * 3 + 2] = z; } snowG.attributes.position.needsUpdate = true; snow.material.opacity = 0.85 * a; }
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  why: wt(0, 'Why'), does: wt(0, 'does'), your: wt(0, 'your'), phone: wt(0, 'phone'), die: wt(0, 'die'), in: wt(0, 'in'), cold: L[0].end - 0.32,
+  l2: L[1].start, charge: wt(1, 'charge'), still: wt(1, 'still'), there: wt(1, 'there'),
+  l3: L[2].start, liquid: wt(2, 'liquid'), thick: wt(2, 'thick'), lithium: wt(2, 'lithium'), crawl: wt(2, 'crawl'),
+  l4: L[3].start, rises: wt(3, 'rises'), voltage: wt(3, 'voltage'), sags: wt(3, 'sags'), asks: wt(3, 'asks'), power: wt(3, 'power'),
+  l5: L[4].start, dips: wt(4, 'dips'), below: wt(4, 'below'), safety: wt(4, 'safety'), shuts: wt(4, 'shuts'), off: wt(4, 'off'),
+  l6: L[5].start, warm: wt(5, 'Warm'), move: wt(5, 'move'), again: wt(5, 'again'),
+  l7: L[6].start, didnt: wt(6, "didn't"), die7: wt(6, 'die'), it7: wt(6, 'It'), froze: wt(6, 'froze'),
+  slam: L[0].end + 0.06,
+}), () => { buildCam(); buildTravel(); });
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.l6, B.l7, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+let CK = [];
+function buildCam() {
+  CK = [
+    [-0.2, [-0.05, 1.5, 4.6], [-0.12, 1.12, 0]],
+    [B.die, [0.0, 1.38, 4.0], [-0.05, 1.12, 0]],
+    [B.slam - 0.05, [0.15, 1.3, 3.5], [0.05, 1.1, 0]],
+    [B.slam + 0.45, [0.42, 1.04, 2.05], [PX, 1.0, 0], 'whip'],
+    [B.l3 - 0.1, [0.44, 0.96, 1.75], [PX, 0.9, 0]],
+    [B.l3 + 0.5, [0.52, 0.88, 1.38], [PX, 0.82, 0], 'whip'],
+    [B.l4 - 0.1, [0.48, 0.86, 1.22], [PX, 0.82, 0]],
+    [B.l4 + 0.5, [0.4, 1.12, 2.2], [PX, 1.08, 0], 'whip'],
+    [B.l5 - 0.1, [0.36, 1.16, 2.0], [PX, 1.1, 0]],
+    [B.l5 + 0.5, [0.35, 1.48, 1.62], [PX, 1.46, 0], 'whip'],
+    [B.shuts - 0.1, [0.35, 1.46, 1.5], [PX, 1.45, 0]],
+    [B.shuts + 0.4, [-0.08, 1.35, 3.9], [-0.12, 1.1, 0], 'whip'],
+    [B.l6 - 0.05, [-0.15, 1.32, 3.7], [-0.12, 1.1, 0]],
+    [B.l6 + 0.5, [0.48, 0.92, 1.4], [PX, 0.88, 0], 'whip'],
+    [B.l7 - 0.1, [0.45, 0.98, 1.6], [PX, 0.95, 0]],
+    [B.l7 + 0.5, [-0.05, 1.42, 4.0], [-0.1, 1.12, 0], 'whip'],
+    [B.sig - 0.05, [-0.08, 1.46, 3.8], [-0.1, 1.12, 0]],
+    [B.sig + 0.5, [0.3, 1.1, 1.3], [PX, 1.0, 0], 'whip'],
+    [B.end + 1, [0.3, 1.1, 1.2], [PX, 1.0, 0]],
+  ]; }
+
+// ---------- state ----------
+const frostAt = t => t < B.l6 ? eio(seg(t, B.l3 - 0.1, B.thick - B.l3 + 0.2)) : 1 - eio(seg(t, B.warm, B.move - B.warm + 0.2));
+const speedAt = t => lerp(1, 0.07, frostAt(t));
+let TRV = [], DT = 1 / 120;
+function buildTravel() { TRV = [0]; for (let k = 1; k * DT < B.end + 2; k++) TRV.push(TRV[k - 1] + speedAt(k * DT) * 0.55 * DT); }
+const travel = t => { const k = clamp(t / DT, 0, TRV.length - 1), i = Math.floor(k); return TRV[i] + (TRV[Math.min(i + 1, TRV.length - 1)] - TRV[i]) * (k - i); };
+// voltage: a steady level, minus load spikes × internal resistance
+const SAFE = 0.36;
+const resAt = t => 0.06 + 0.2 * eio(seg(t, B.rises - 0.15, 0.8)) + 0.18 * eio(seg(t, B.dips - 0.2, 0.45));
+const loadAt = t => { if (t < B.l4) return 0.25; const p = ((t - B.l4) / 0.62) % 1; const big = t > B.dips - 0.15 && t < B.off ? 1.6 : 1; return 0.25 + (p < 0.32 ? Math.sin(p / 0.32 * Math.PI) * big : 0); };
+const voltAt = t => Math.max(0.1, 0.82 - loadAt(t) * resAt(t) * 1.15);
+const offA = t => (t > B.off - 0.05 && t < B.warm + 0.25) ? clamp((t - B.off + 0.05) / 0.12) * (1 - seg(t, B.warm, 0.25)) : 0;
+const pctAt = t => t < B.die ? Math.round(lerp(41, 23, t / B.die)) : t < B.again ? 0 : 41;
+
+function drawScreen(t) {
+  const xray = clamp(seg(t, B.l2 - 0.1, 0.35)), graph = t > B.l4 + 0.1 && t < B.off + 0.05 ? clamp((t - B.l4 - 0.1) / 0.3) : 0;
+  const deadA = t > B.cold - 0.05 && t < B.l2 + 0.25 ? clamp((t - B.cold + 0.05) / 0.12) * (1 - seg(t, B.l2, 0.25)) : 0;
+  const ui0 = t < B.l2 ? 1 - deadA : t > B.again - 0.1 ? clamp((t - B.again + 0.1) / 0.25) : 0;
+  SC.draw((x, w, h) => { x.clearRect(0, 0, w, h);
+    // base: dark glass; transparent in x-ray, black when dead/off
+    const base = Math.max(1 - xray, deadA, offA(t) * 0.85, ui0 * 0.55);
+    x.fillStyle = `rgba(5,8,26,${0.92 * base})`; x.beginPath(); x.roundRect(0, 0, w, h, 60); x.fill();
+    if (ui0 > 0.01) { // battery UI
+      const p = pctAt(t), red = p < 10, col = red ? RD : (t > B.again ? CY : '#ffffff');
+      x.globalAlpha = ui0; x.textAlign = 'center'; x.textBaseline = 'middle'; x.font = '700 250px Poppins'; x.fillStyle = col; x.shadowColor = col; x.shadowBlur = 30; x.fillText(p + '%', w / 2, h * 0.36); x.shadowBlur = 0;
+      const bx = w / 2 - 170, by = h * 0.52, bw = 320, bh = 140; x.strokeStyle = '#c8ceff'; x.lineWidth = 12; x.beginPath(); x.roundRect(bx, by, bw, bh, 26); x.stroke(); x.fillStyle = '#c8ceff'; x.fillRect(bx + bw + 6, by + 42, 22, 56);
+      x.fillStyle = col; x.beginPath(); x.roundRect(bx + 16, by + 16, Math.max(8, (bw - 32) * p / 100), bh - 32, 14); x.fill();
+      if (t < B.cold && t > B.die - 0.05) { x.font = '700 64px Poppins'; x.fillStyle = RD; x.fillText('BATTERY EMPTY', w / 2, h * 0.68); }
+      x.globalAlpha = 1; }
+    if (deadA > 0.01 || offA(t) > 0.01) { const a = Math.max(deadA, offA(t)); x.globalAlpha = a * 0.6; x.strokeStyle = '#59628f'; x.lineWidth = 16; x.lineCap = 'round'; x.beginPath(); x.arc(w / 2, h * 0.2, 70, -Math.PI * 0.32, Math.PI * 1.32); x.stroke(); x.beginPath(); x.moveTo(w / 2, h * 0.2 - 100); x.lineTo(w / 2, h * 0.2 - 10); x.stroke(); x.globalAlpha = 1; }
+    if (graph > 0.01) { // voltage trace in the upper screen
+      const gx0 = 50, gx1 = w - 50, gy0 = 70, gy1 = h * 0.4, span = 2.6, now = Math.min(t, B.off);
+      x.globalAlpha = graph; x.fillStyle = 'rgba(8,12,40,0.85)'; x.beginPath(); x.roundRect(gx0 - 20, gy0 - 30, gx1 - gx0 + 40, gy1 - gy0 + 60, 40); x.fill(); x.strokeStyle = 'rgba(62,230,255,0.35)'; x.lineWidth = 4; x.stroke();
+      const Y = v => gy1 - v * (gy1 - gy0);
+      if (t > B.safety - 0.1) { const a = clamp((t - B.safety + 0.1) / 0.2); x.globalAlpha = graph * a; x.setLineDash([26, 18]); x.strokeStyle = RD; x.lineWidth = 8; x.beginPath(); x.moveTo(gx0, Y(SAFE)); x.lineTo(gx1, Y(SAFE)); x.stroke(); x.setLineDash([]); x.globalAlpha = graph; }
+      x.font = '700 46px Poppins'; x.textAlign = 'left'; x.fillStyle = CY; x.fillText('VOLTAGE', gx0 + 10, gy0 + 30);
+      x.strokeStyle = '#ffffff'; x.shadowColor = CY; x.shadowBlur = 18; x.lineWidth = 10; x.lineJoin = 'round'; x.beginPath();
+      for (let i = 0; i <= 260; i++) { const u = i / 260, tt = now - span + u * span; if (tt < B.l4) continue; const px = gx0 + u * (gx1 - gx0), py = Y(voltAt(tt)); x.lineTo(px, py); } x.stroke(); x.shadowBlur = 0;
+      const v = voltAt(now), dot = v < SAFE ? RD : CY; x.fillStyle = dot; x.shadowColor = dot; x.shadowBlur = 30; x.beginPath(); x.arc(gx1, Y(v), 16, 0, 7); x.fill(); x.shadowBlur = 0; x.globalAlpha = 1; }
+  });
+}
+function props(t) {
+  snowAt(t, 1); drawScreen(t);
+  const fr = frostAt(t), trv = travel(t), sp = speedAt(t);
+  ions.forEach(m => { const d = m.userData, u = (d.ph + trv) % 1; const span = BW - 0.2; m.position.set(-span / 2 + u * span, d.y + Math.sin(t * 6 * sp + d.w) * 0.02 * sp, d.z); m.material.color.set(fr > 0.5 ? '#6fb4f0' : CY); m.scale.setScalar(1 + 0.2 * fr); });
+  elyteM.color.set(new THREE.Color('#0b2a6b').lerp(new THREE.Color('#2c4f8f'), fr)); elyteM.opacity = 0.32 + 0.12 * fr; frost.material.opacity = 0.3 * fr;
+  ionGlow.material.opacity = 0.28 * (1 - 0.6 * fr);
+  const wg = t > B.warm - 0.1 ? clamp((t - B.warm + 0.1) / 0.3) * (1 - seg(t, B.l7 + 0.6, 0.6)) : 0; warmGlow.material.opacity = 0.42 * wg;
+  // the guy: shivering worry → surprise at the shutdown → happy when it comes back
+  const mood = t > B.again ? 'happy' : (t > B.off - 0.1 && t < B.warm) ? 'surprised' : (t < B.slam + 0.4 ? 'worried' : 'neutral');
+  const pose = t > B.off - 0.1 && t < B.warm ? 'surprised' : t > B.again ? 'point' : 'idle';
+  guy.update(t, { pose, mood, headTurn: 0.2 }); guy.root.position.x = -0.62 + (t < B.l6 && t > B.l3 ? Math.sin(t * 40) * 0.004 : 0);
+}
+
+// ---------- type ----------
+function drawType(t) {
+  hook(t, [[['WHY', 'why'], ['DOES', 'does'], ['YOUR', 'your'], ['PHONE', 'phone']], [['DIE', 'die', RD]], [['IN', 'in'], ['THE', 'in'], ['COLD?', 'cold', CY]]], [300, 470, 640], [110, 200, 130]);
+  superAt(t, 'STILL CHARGED', B.charge - 0.05, B.l3 - B.charge + 0.05, 300, 140, CY);
+  superAt(t, 'THICK', B.thick - 0.05, B.lithium - B.thick, 300, 220, ICE);
+  superAt(t, 'IONS CRAWL', B.crawl - 0.25, B.l4 - B.crawl + 0.3, 300, 160, ICE);
+  superAt(t, 'RESISTANCE ↑', B.l4 - 0.05, B.voltage - B.l4, 300, 130, AM);
+  superAt(t, 'VOLTAGE SAGS', B.sags - 0.05, B.l5 - B.sags + 0.05, 300, 140);
+  superAt(t, 'SAFETY LINE', B.safety - 0.05, B.shuts - B.safety, 1600, 130, RD);
+  superAt(t, 'OFF', B.shuts, B.l6 - B.shuts + 0.05, 300, 260, RD);
+  superAt(t, 'WARM IT UP', B.warm - 0.05, B.move - B.warm, 300, 160, AM);
+  superAt(t, 'IONS MOVE', B.move - 0.05, B.l7 - B.move + 0.05, 300, 160, CY);
+  if (t > B.didnt - 0.05 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) }; line([["DIDN'T", B.didnt - 0.05], ['DIE.', B.die7 - 0.05, RD]], 300, 150, t, o); line([['IT', B.it7 - 0.05], ['FROZE.', B.froze - 0.05, ICE]], 470, 170, t, o); }
+  const fa = (t > B.l2 + 0.3 && t < B.l7) ? clamp((t - B.l2 - 0.3) / 0.3) * (1 - seg(t, B.l7 - 0.2, 0.2)) : 0; foot('Simplified model · illustrative, not to scale', fa, 1720);
+}
+
+// ---------- sound cue sheet (clean tonal only) ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  for (const k of ['why', 'does', 'your', 'phone']) ev(B[k], 'tick', 0.9); ev(B.die, 'pop', 1.1); ev(B.cold - 0.05, 'pop2', 0.8); ev(B.slam, 'slam', 1.2); ev(B.slam, 'whoosh', 1);
+  ev(B.charge - 0.05, 'super', 0.9); ev(B.still, 'ping', 0.6);
+  ev(B.l3 + 0.1, 'whoosh'); ev(B.thick - 0.05, 'slam', 0.6); ev(B.crawl - 0.25, 'super', 0.7);
+  ev(B.l4 + 0.1, 'whoosh'); ev(B.l4 - 0.05, 'pop2', 0.8); ev(B.sags - 0.05, 'swish', 1); ev(B.asks, 'click', 0.8); ev(B.power, 'click', 0.8);
+  ev(B.l5 + 0.1, 'whoosh'); ev(B.safety - 0.05, 'pop', 0.9); ev(B.shuts, 'slam', 1.1);
+  ev(B.shuts + 0.4, 'whoosh', 0.9); ev(B.warm - 0.05, 'super'); ev(B.l6 + 0.5, 'whoosh'); ev(B.move - 0.05, 'ping', 0.8); ev(B.again, 'card');
+  ev(B.l7 + 0.5, 'whoosh'); ev(B.didnt - 0.05, 'pop2'); ev(B.die7 - 0.05, 'pop2', 0.8); ev(B.froze - 0.05, 'slam', 0.7);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.slam, B.shuts] }); props(t);
+  bloom.strength = 0.6 + (t > B.slam ? 0.45 * Math.exp(-(t - B.slam) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawType(t); signature(t, 'Simplified model · not an engineering diagram', RD); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>

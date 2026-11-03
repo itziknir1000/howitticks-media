@@ -1,0 +1,7 @@
+Why does your phone die in the cold?
+The charge is still in there.
+Cold makes the battery's liquid thick, so the lithium ions crawl.
+Resistance rises, so the voltage sags when the phone asks for power.
+It dips below a safety line, and the phone shuts itself off.
+Warm it up, and the ions move again.
+Your phone didn't die. It froze.
