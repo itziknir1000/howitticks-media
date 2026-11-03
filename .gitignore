@@ -1,0 +1,6 @@
+__pycache__/
+engine/deliver/
+engine/out_*/
+engine/*_voice.wav
+engine/*_timing.json
+engine/*.log
