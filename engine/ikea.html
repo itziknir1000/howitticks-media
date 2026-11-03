@@ -1,0 +1,176 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// You came for one lamp. Why is your cart full? One thread: the amber route, with the cart riding it and filling up.
+import { makeToon, toon } from './toon.js';
+import { THREE, RoundedBoxGeometry, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex, txt } from './common.js';
+import { B, v3, easeB, installTimeline, stage, glowSprite, camAt, line, superAt, hook, counter, foot, signature, sigEvents, filmLook, eventsHelper, CY, RD, AM } from './hit.js';
+
+bloom.threshold = 0.82; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.6; key.castShadow = false;
+stage();
+const T = toon;
+// ---------- the store maquette: 3x3 rooms, x-ray walls ----------
+const CELL = 2.0, cx = c => (c - 1) * CELL, cz = r => (r - 1) * CELL;
+const ORDER = [[0, 2], [0, 1], [0, 0], [1, 0], [2, 0], [2, 1], [1, 1], [1, 2], [2, 2]];
+const NAMES = { '0,2': 'LIVING ROOMS', '0,1': 'KITCHENS', '0,0': 'DINING', '1,0': 'BEDROOMS', '2,0': 'KIDS', '2,1': 'OFFICES', '1,1': 'BATHROOMS', '1,2': 'LIGHTING', '2,2': 'MARKET HALL' };
+const wallMat = new THREE.MeshPhysicalMaterial({ color: '#16205a', transparent: true, opacity: 0.5, roughness: 0.3, emissive: '#0a1030', emissiveIntensity: 0.8, depthWrite: false });
+const edgeMat = new THREE.LineBasicMaterial({ color: CY, transparent: true, opacity: 0.55, toneMapped: false });
+const store = new THREE.Group(); scene.add(store);
+const open = new Set(); for (let i = 1; i < ORDER.length; i++) { const [a, b] = [ORDER[i - 1], ORDER[i]]; open.add([a, b].map(p => p.join(',')).sort().join('|')); }
+function wall(x0, z0, x1, z1) { const L = Math.hypot(x1 - x0, z1 - z0); const g = new RoundedBoxGeometry(L + 0.06, 0.55, 0.06, 2, 0.02); const m = new THREE.Mesh(g, wallMat); m.position.set((x0 + x1) / 2, 0.275, (z0 + z1) / 2); m.rotation.y = -Math.atan2(z1 - z0, x1 - x0); store.add(m);
+  const e = new THREE.LineSegments(new THREE.EdgesGeometry(g), edgeMat); e.position.copy(m.position); e.rotation.copy(m.rotation); store.add(e); }
+const H0 = CELL * 1.5;
+for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) {
+  // right edge of (c,r)
+  if (c < 2) { const k = [[c, r], [c + 1, r]].map(p => p.join(',')).sort().join('|'); const x = cx(c) + CELL / 2; if (open.has(k)) { wall(x, cz(r) - CELL / 2, x, cz(r) - 0.45); wall(x, cz(r) + 0.45, x, cz(r) + CELL / 2); } else wall(x, cz(r) - CELL / 2, x, cz(r) + CELL / 2); }
+  if (r < 2) { const k = [[c, r], [c, r + 1]].map(p => p.join(',')).sort().join('|'); const z = cz(r) + CELL / 2; if (open.has(k)) { wall(cx(c) - CELL / 2, z, cx(c) - 0.45, z); wall(cx(c) + 0.45, z, cx(c) + CELL / 2, z); } else wall(cx(c) - CELL / 2, z, cx(c) + CELL / 2, z); }
+}
+// outer walls with entrance (bottom of 0,2) and exit (right of 2,2)
+wall(-H0, -H0, H0, -H0); wall(-H0, -H0, -H0, H0); wall(-H0, H0, cx(0) - 0.45, H0); wall(cx(0) + 0.45, H0, H0, H0); wall(H0, -H0, H0, cz(2) - 0.45); wall(H0, cz(2) + 0.45, H0, H0);
+const floorPlate = new THREE.Mesh(new THREE.PlaneGeometry(H0 * 2, H0 * 2), new THREE.MeshStandardMaterial({ color: '#0e1440', roughness: 0.8 })); floorPlate.rotation.x = -Math.PI / 2; floorPlate.position.y = 0.004; store.add(floorPlate);
+// room labels on the floor
+for (const [k, s] of Object.entries(NAMES)) { const [c, r] = k.split(',').map(Number); const t = canvasTex(512, 96); t.draw((x, w, h) => txt(x, s, w / 2, h / 2 + 4, 52, 'rgba(200,210,255,0.85)', { dir: 'ltr', font: 'Poppins' }));
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.28), new THREE.MeshBasicMaterial({ map: t.tex, transparent: true, toneMapped: false, depthWrite: false })); m.rotation.x = -Math.PI / 2; m.position.set(cx(c), 0.01, cz(r) - 0.7); store.add(m); }
+// furniture: muted grey volumes (colour only on heroes)
+const grey = T('#5a6390');
+function box(w, h, d, x, z, y = 0) { const m = new THREE.Mesh(new RoundedBoxGeometry(w, h, d, 2, 0.03), grey); m.position.set(x, y + h / 2, z); store.add(m); return m; }
+for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) { const X = cx(c), Z = cz(r); const k = c + '' + r;
+  if (k === '22') continue;
+  if (k === '12') continue;
+  box(0.7, 0.22, 0.32, X - 0.45, Z - 0.6 + 0.35); box(0.32, 0.38, 0.32, X + 0.55, Z + 0.55); box(0.5, 0.14, 0.5, X + 0.5, Z - 0.35); }
+// lighting room: rows of lamps, one hero lamp (amber)
+const lamps = []; for (let i = 0; i < 6; i++) { const g = new THREE.Group(); const X = cx(1) - 0.6 + (i % 3) * 0.6, Z = cz(2) - 0.3 + Math.floor(i / 3) * 0.6;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.42, 8), grey); pole.position.y = 0.21; g.add(pole);
+  const shade = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.1, 18, 1, true), i === 1 ? new THREE.MeshBasicMaterial({ color: new THREE.Color(AM).multiplyScalar(1.4), toneMapped: false, side: THREE.DoubleSide }) : grey); shade.position.y = 0.44; g.add(shade);
+  g.position.set(X, 0, Z); store.add(g); lamps.push(g); }
+const heroLamp = lamps[1]; const lampGlow = glowSprite('rgba(255,181,71,1)', 0.7, 0.5); lampGlow.position.set(heroLamp.position.x, 0.48, heroLamp.position.z); scene.add(lampGlow);
+// market hall: bins full of small colourful things
+const binItems = []; const COLS = ['#ff6b8a', '#ffb547', '#3ee6ff', '#9b6bff', '#58e07a', '#ffd54a'];
+for (let i = 0; i < 4; i++) { const X = cx(2) - 0.55 + (i % 2) * 1.0, Z = cz(2) - 0.45 + Math.floor(i / 2) * 0.75; const bin = new THREE.Mesh(new RoundedBoxGeometry(0.55, 0.22, 0.42, 2, 0.03), grey); bin.position.set(X, 0.11, Z); store.add(bin);
+  for (let j = 0; j < 10; j++) { const it = new THREE.Mesh(j % 2 ? new THREE.SphereGeometry(0.045, 12, 8) : new RoundedBoxGeometry(0.08, 0.06, 0.06, 2, 0.01), T(COLS[(i + j) % 6])); it.position.set(X - 0.2 + (j % 5) * 0.1, 0.24, Z - 0.1 + Math.floor(j / 5) * 0.18); store.add(it); binItems.push(it); } }
+// price tag sprites over the bins
+const tagT = canvasTex(256, 128); tagT.draw((x, w, h) => { x.fillStyle = '#ffd54a'; x.beginPath(); x.roundRect(6, 6, w - 12, h - 12, 18); x.fill(); txt(x, '$1.99', w / 2, h / 2 + 6, 70, '#1a1406', { dir: 'ltr', font: 'Poppins' }); });
+const tags = []; for (let i = 0; i < 4; i++) { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tagT.tex, transparent: true, toneMapped: false })); s.scale.set(0.34, 0.17, 1); s.position.set(cx(2) - 0.55 + (i % 2) * 1.0, 0.62, cz(2) - 0.45 + Math.floor(i / 2) * 0.75); scene.add(s); tags.push(s); }
+
+// ---------- the route (amber thread) ----------
+const pts = [v3([cx(0), 0.03, H0 + 0.9])]; ORDER.forEach(([c, r]) => pts.push(v3([cx(c), 0.03, cz(r)]))); pts.push(v3([H0 + 0.9, 0.03, cz(2)]));
+const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.25); const TS = 600;
+const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, TS, 0.035, 8, false), new THREE.MeshBasicMaterial({ color: new THREE.Color(AM).multiplyScalar(1.5), toneMapped: false })); scene.add(tube);
+const flow = []; for (let i = 0; i < 26; i++) { const s = glowSprite('rgba(255,181,71,1)', 0.16, 0.9); scene.add(s); flow.push(s); }
+
+// ---------- the cart + YOU ----------
+const cart = new THREE.Group(); scene.add(cart);
+{ const basket = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.2, 0.24, 2, 0.02), new THREE.MeshPhysicalMaterial({ color: '#9fb4ff', transparent: true, opacity: 0.35, depthWrite: false })); basket.position.y = 0.2; cart.add(basket);
+  const be = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(0.34, 0.2, 0.24)), new THREE.LineBasicMaterial({ color: '#dfe6ff', toneMapped: false })); be.position.y = 0.2; cart.add(be);
+  for (const [x, z] of [[-0.13, -0.09], [0.13, -0.09], [-0.13, 0.09], [0.13, 0.09]]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.02, 12), T('#222')); w.rotation.x = Math.PI / 2; w.position.set(x, 0.03, z); cart.add(w); }
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.26, 8), T('#dfe6ff')); handle.rotation.x = Math.PI / 2; handle.position.set(-0.2, 0.33, 0); cart.add(handle); }
+const cartItems = []; for (let i = 0; i < 16; i++) { const it = new THREE.Mesh(i % 3 ? new RoundedBoxGeometry(0.07, 0.06, 0.06, 2, 0.01) : new THREE.SphereGeometry(0.04, 12, 8), T(COLS[i % 6])); it.position.set(-0.11 + (i % 4) * 0.075, 0.16 + Math.floor(i / 8) * 0.07, -0.07 + Math.floor((i % 8) / 4) * 0.12); cart.add(it); cartItems.push(it); }
+const cartLamp = lamps[1].clone(); cartLamp.scale.setScalar(0.55); cartLamp.position.set(0.08, 0.12, 0); cartLamp.visible = false; cart.add(cartLamp);
+const guy = makeToon('guy'); guy.root.scale.setScalar(0.38); scene.add(guy.root);
+const tag = (() => { const t = canvasTex(256, 128); t.draw((x, w, h) => { x.fillStyle = '#c9a36b'; x.beginPath(); x.roundRect(8, 8, w - 16, h - 16, 18); x.fill(); txt(x, 'YOU', w / 2 + 8, h / 2 + 4, 70, '#2a1c08', { dir: 'ltr', font: 'Poppins' }); });
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t.tex, toneMapped: false, depthTest: false })); s.scale.set(0.16, 0.08, 1); s.renderOrder = 5; scene.add(s); return s; })();
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  you: wt(0, 'You'), came: wt(0, 'came'), ikea: wt(0, 'IKEA'), one: wt(0, 'one'), lamp: wt(0, 'lamp'), why: wt(0, 'Why'), cart: wt(0, 'cart'), full: wt(0, 'full'),
+  l2: L[1].start, long: wt(1, 'long'), path: wt(1, 'path'), walks: wt(1, 'walks'), every: wt(1, 'every'), room: wt(1, 'room'),
+  l3: L[2].start, turn: wt(2, 'turn'), newb: wt(2, 'new'), no: wt(2, 'no'), back: wt(2, 'back'),
+  l4: L[3].start, prof: wt(3, 'professor'), sixty: wt(3, 'sixty'), percent: wt(3, 'percent'), list: wt(3, 'list'),
+  l5: L[4].start, market: wt(4, 'Market'), cheap: wt(4, 'cheap'), exit: wt(4, 'exit'),
+  l6: L[5].start, lamp2: wt(5, 'lamp'), never: wt(5, 'never'), point: wt(5, 'point'), walk: wt(5, 'walk'), was: wt(5, 'was', 1),
+}), buildCam);
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.l6, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+// cart progress along the route (0 entrance → 1 exit)
+const uLight = curve.getUtoTmapping ? 0.80 : 0.8; // ~ lighting room
+function prog(t) {
+  if (t < B.slam) return 0.035 * seg(t, 0, B.slam);
+  if (t < B.l4) return lerp(0.035, 0.62, eio(seg(t, B.slam, B.l4 - B.slam)));
+  if (t < B.l5) return lerp(0.62, 0.76, seg(t, B.l4, B.l5 - B.l4));
+  if (t < B.l6) return lerp(0.76, 0.93, eio(seg(t, B.l5, B.l6 - B.l5)));
+  return lerp(0.93, 0.985, eo(seg(t, B.l6, 1.2)));
+}
+let CK = [];
+function cartAt(t) { return curve.getPointAt(clamp(prog(t), 0, 1)); }
+function cf(t) { const p = cartAt(t); return [[p.x + 0.9, 2.5, p.z + 2.3], [p.x + 0.1, 0.15, p.z]]; }
+function buildCam() { const f = (t, dy, back, side = 0.3) => { const p = cartAt(t), tg = curve.getTangentAt(clamp(prog(t), 0.001, 0.999)); return [[p.x - tg.x * back + side, p.y + dy, p.z - tg.z * back + 0.9], [p.x, 0.2, p.z]]; };
+  const k = (t, dy, back, side, w) => { const [a, b] = f(t, dy, back, side); return [t, a, b, w]; };
+  CK = [
+    [-0.2, [cx(0) - 0.15, 1.5, H0 + 2.5], [cx(0) + 0.1, 0.15, H0 - 0.8]],
+    [B.why, [cx(0) - 0.05, 1.6, H0 + 2.15], [cx(0) + 0.2, 0.15, H0 - 1.0]],
+    [B.slam + 0.5, [0.3, 7.4, 6.6], [0, 0, 0.3], 'whip'],
+    [B.l3 - 0.2, [-0.2, 6.6, 5.6], [0, 0, 0]],
+    [B.l3 + 0.45, cf(B.l3 + 0.45)[0], cf(B.l3 + 0.45)[1], 'whip'],
+    [B.no - 0.1, cf(B.no - 0.1)[0], cf(B.no - 0.1)[1]],
+    [B.l4 + 0.5, [0.8, 6.0, 6.0], [0.4, 0, 0.6], 'whip'],
+    [B.l5 - 0.1, [0.9, 5.6, 5.5], [0.5, 0, 0.7]],
+    [B.l5 + 0.5, [cx(2) - 0.4, 2.6, cz(2) + 2.9], [cx(2) - 0.3, 0.2, cz(2)], 'whip'],
+    [B.l6 - 0.1, [cx(2) - 0.1, 2.4, cz(2) + 2.6], [cx(2) + 0.1, 0.2, cz(2)]],
+    [B.l6 + 0.4, [cx(2) + 0.9, 1.9, cz(2) + 2.0], [cx(2) + 0.8, 0.25, cz(2) + 0.1], 'whip'],
+    [B.walk - 0.15, [cx(2) + 1.0, 2.0, cz(2) + 2.1], [cx(2) + 0.9, 0.25, cz(2) + 0.1]],
+    [B.walk + 0.6, [0.2, 9.6, 6.4], [0, 0, 0.4], 'whip'],
+    [B.sig + 0.3, [0.2, 9.2, 6.0], [0, 0, 0.4]],
+    [B.end + 1, [0.2, 9.0, 5.8], [0, 0, 0.4]],
+  ]; }
+
+// ---------- per frame ----------
+function props(t) {
+  const u = clamp(prog(t), 0, 1);
+  // route reveal: drawn up to the cart (+ a little ahead once we're looking from above); fully lit at the end
+  const reveal = t > B.walk ? lerp(u, 1, eio(seg(t, B.walk, 0.8))) : t > B.long - 0.15 && t < B.l3 + 0.3 ? Math.max(u + 0.03, eio(seg(t, B.long - 0.15, 1.6))) : t >= B.l3 + 0.3 ? 1 : Math.min(1, u + 0.02);
+  tube.geometry.setDrawRange(0, Math.floor(reveal * TS) * 8 * 6);
+  flow.forEach((s, i) => { const k = ((i / flow.length + t * 0.06) % 1) * reveal; s.position.copy(curve.getPointAt(k)).add(v3([0, 0.03, 0])); s.material.opacity = 0.85; });
+  // cart + YOU
+  const p = curve.getPointAt(u), tg = curve.getTangentAt(clamp(u, 0.001, 0.999)); const ang = Math.atan2(tg.x, tg.z);
+  cart.position.copy(p); cart.rotation.y = ang - Math.PI / 2;
+  const back = p.clone().addScaledVector(tg, -0.32); guy.root.position.set(back.x, 0, back.z); guy.root.rotation.y = ang;
+  const walking = t > B.slam && t < B.walk; guy.update(t, { pose: walking ? 'walk' : 'idle', mood: t > B.l6 ? 'happy' : t > B.no && t < B.l4 ? 'worried' : t > B.cheap && t < B.l6 ? 'surprised' : 'neutral' });
+  tag.position.set(back.x, 0.78, back.z); tag.visible = t < B.slam + 0.4 || (t > B.l3 && t < B.l4 + 0.4) || (t > B.l5);
+  // cart fills with items as rooms pass; the market hall adds a burst
+  const fill = Math.floor(clamp(u / 0.78) * 9) + (t > B.cheap ? Math.floor(seg(t, B.cheap, 1.4) * 7) : 0) + (t < B.slam ? 0 : 0);
+  cartItems.forEach((it, i) => { const on = i < fill; it.visible = on; const age = on ? 1 : 0; it.scale.setScalar(on ? 1 : 0.001); });
+  // the hero lamp: glows from the hook; lands in the cart when we pass lighting
+  const gotLamp = u > 0.74; heroLamp.visible = !gotLamp; cartLamp.visible = gotLamp; lampGlow.position.copy(gotLamp ? cart.position.clone().add(v3([0, 0.35, 0])) : v3([heroLamp.position.x, 0.48, heroLamp.position.z]));
+  lampGlow.material.opacity = (t < B.slam + 0.3 || (t > B.l6 && t < B.sig)) ? 0.75 : 0.25;
+  tags.forEach((s, i) => { const k = easeB(seg(t, B.cheap - 0.1 + i * 0.08, 0.3)); s.scale.set(0.22 * k + 0.001, 0.11 * k + 0.001, 1); });
+  // the way back is blocked: walls behind the cart flash red on "no easy way back"
+  const flash = t > B.no - 0.1 && t < B.l4 ? 0.6 + 0.4 * Math.sin((t - B.no) * 10) : 0; edgeMat.color.set(flash > 0 ? '#ff6a80' : CY); edgeMat.opacity = flash > 0 ? 0.85 : 0.55;
+}
+
+// ---------- type ----------
+function drawType(t) {
+  hook(t, [[['YOU', 'you'], ['CAME', 'came'], ['FOR', 'one']], [['ONE', 'one'], ['LAMP', 'lamp', AM]], [['WHY', 'why'], ['IS', 'why'], ['YOUR', 'cart'], ['CART', 'cart'], ['FULL?', 'full', RD]]], [380, 560, 740], [150, 190, 120]);
+  superAt(t, 'ONE WAY', B.long - 0.05, B.walks - B.long, 300, 210, AM);
+  superAt(t, 'EVERY ROOM', B.every - 0.05, B.l3 - B.every + 0.1, 300, 170);
+  superAt(t, 'SOMETHING NEW', B.turn, B.no - B.turn - 0.05, 300, 140, CY);
+  superAt(t, 'NO WAY BACK', B.no - 0.05, B.l4 - B.no + 0.05, 300, 160, RD);
+  if (t > B.sixty - 0.1 && t < B.l5 + 0.05) { counter(t, B.sixty - 0.05, B.l5 + 0.05, 60, '%', 300, AM); if (t > B.list - 0.2) { ui.save(); ui.globalAlpha = clamp((t - B.list + 0.2) / 0.2) * clamp((B.l5 + 0.05 - t) / 0.14); ui.font = '700 64px Poppins'; ui.textAlign = 'center'; ui.fillStyle = '#fff'; ui.shadowColor = 'rgba(0,0,0,0.8)'; ui.shadowBlur = 20; ui.fillText('NOT ON THE LIST', 540, 470); ui.restore(); } }
+  if (t > B.l4 - 0.1 && t < B.l5 + 0.2) foot('Estimate by Prof. Alan Penn (UCL), 2011, as reported by TIME and Yahoo News', clamp((t - B.l4) / 0.3) * clamp((B.l5 + 0.2 - t) / 0.2));
+  superAt(t, 'MARKET HALL', B.market - 0.05, B.cheap - B.market, 300, 170, AM);
+  superAt(t, 'CHEAP LITTLE THINGS', B.cheap, B.l6 - B.cheap + 0.05, 300, 120);
+  superAt(t, 'NEVER THE POINT', B.never - 0.05, B.walk - B.never - 0.1, 300, 140);
+  if (t > B.walk - 0.15 && t < B.sig + 0.25) line([['THE', B.walk - 0.15], ['WALK', B.walk, AM], ['WAS', B.was]], 300, 190, t, { a: clamp((B.sig + 0.25 - t) / 0.15) });
+}
+
+// ---------- sound ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  for (const k of ['you', 'came', 'one']) ev(B[k], 'tick', 0.9); ev(B.lamp, 'pop', 1); ev(B.why, 'tick', 0.8); ev(B.cart, 'tick', 0.8); ev(B.full, 'pop', 1); ev(B.slam, 'slam', 1.2); ev(B.slam, 'whoosh', 1);
+  ev(B.long - 0.05, 'super'); ev(B.every - 0.05, 'super', 0.8); for (let i = 0; i < 9; i++) ev(B.slam + 0.4 + i * (B.l4 - B.slam - 0.4) / 9, 'pop2', 0.45);
+  ev(B.l3 + 0.1, 'whoosh'); ev(B.turn, 'super', 0.7); ev(B.no - 0.05, 'slam', 0.6); ev(B.no - 0.05, 'super');
+  ev(B.l4 + 0.1, 'whoosh'); for (let i = 0; i < 6; i++) ev(B.sixty - 0.05 + i * 0.06, 'tick', 0.6); ev(B.sixty + 0.3, 'slam', 0.9);
+  ev(B.l5 + 0.1, 'whoosh'); ev(B.market - 0.05, 'super'); for (let i = 0; i < 7; i++) ev(B.cheap + i * 0.2, 'pop2', 0.55); ev(B.cheap - 0.1, 'card');
+  ev(B.l6 + 0.1, 'whoosh'); ev(B.never - 0.05, 'super', 0.7); ev(B.walk + 0.1, 'whoosh', 1.1); ev(B.walk, 'slam', 0.7);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.slam] });
+  { const sF = eio(seg(t, B.l3 - 0.05, 0.5)) * (1 - eio(seg(t, B.l4, 0.5))); if (sF > 0) { const p = cartAt(t); const fp = v3([p.x + 0.9, 2.3, p.z + 2.1]), fl = v3([p.x + 0.1, 0.15, p.z]); const d = new THREE.Vector3(); cam.getWorldDirection(d); const cl = cam.position.clone().add(d.multiplyScalar(3)); cam.position.lerp(fp, sF); cam.lookAt(cl.lerp(fl, sF)); } }
+  props(t);
+  bloom.strength = 0.6 + (t > B.slam ? 0.45 * Math.exp(-(t - B.slam) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawType(t); signature(t, 'Spec explainer · not affiliated with IKEA', RD); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>
