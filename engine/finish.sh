@@ -1,6 +1,6 @@
 #!/bin/bash
 # usage: finish.sh name   (page name.html, timing name_timing.json) → deliver/howitticks_name.mp4 (+ _ig)
-cd /home/claude/engine3d; n=$1; o=out_$n
+cd /home/claude/engine3d; n=$1; o=out_$n; mkdir -p deliver
 mkdir -p $o; rm -f $o/*.tmp.mp4 $o/video_noaudio.mp4
 python3 render.py $n.html ${n}_timing.json $o > render_$n.log 2>&1 || { echo RENDER_FAIL; tail -5 render_$n.log; exit 1; }
 python3 - <<PY
