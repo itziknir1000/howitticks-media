@@ -1,0 +1,206 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// Does your elevator's close button do anything? One thread: the amber CLOSE button. Its press becomes a pulse on a wire,
+// the pulse hits a 3-second timer lock and bounces, the firefighter key unlocks it, and the last press bounces again.
+import { makeToon, toon } from './toon.js';
+const note = (str, a, y) => { if (a <= 0) return; ui.save(); ui.globalAlpha = a; ui.font = '500 34px Poppins'; const w = ui.measureText(str).width + 48; ui.fillStyle = 'rgba(3,5,18,0.72)'; ui.beginPath(); ui.roundRect(540 - w / 2, y - 30, w, 58, 29); ui.fill(); ui.fillStyle = '#c8ceff'; ui.textAlign = 'center'; ui.textBaseline = 'middle'; ui.fillText(str, 540, y); ui.restore(); };
+import { THREE, RoundedBoxGeometry, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex, txt } from './common.js';
+import { B, v3, easeB, installTimeline, stage, glowSprite, camAt, line, word, superAt, counter, foot, signature, sigEvents, filmLook, eventsHelper, CY, PU, RD, AM } from './hit.js';
+
+bloom.threshold = 0.8; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.7; key.castShadow = false;
+stage();
+const T = toon;
+const edge = (g, col = CY, op = 0.7) => new THREE.LineSegments(new THREE.EdgesGeometry(g, 20), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: op, toneMapped: false }));
+const glass = (op = 0.35, col = '#14206a') => new THREE.MeshPhysicalMaterial({ color: col, metalness: 0.3, roughness: 0.25, transparent: true, opacity: op, depthWrite: false, emissive: '#0a1240', emissiveIntensity: 0.8 });
+
+// ---------- the front wall of the cab: doors + panel ----------
+const WZ = -0.5;
+const wallM = new THREE.MeshStandardMaterial({ color: '#141b4d', roughness: 0.6, metalness: 0.3, transparent: true, opacity: 1, emissive: '#070b2a', emissiveIntensity: 0.6 });
+const wallR = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.6, 0.06), wallM); wallR.position.set(1.15, 1.3, WZ - 0.03); scene.add(wallR); { const e = edge(new THREE.BoxGeometry(1.1, 2.6, 0.06), CY, 0.35); e.position.copy(wallR.position); scene.add(e); }
+const wallL = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.6, 0.06), wallM); wallL.position.set(-1.15, 1.3, WZ - 0.03); scene.add(wallL);
+const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.5, 0.06), wallM); lintel.position.set(0, 2.35, WZ - 0.03); scene.add(lintel);
+const DW = 0.6, DH = 2.1; const doors = [-1, 1].map(s => { const g = new THREE.Group(); scene.add(g);
+  const geo = new RoundedBoxGeometry(DW, DH, 0.04, 3, 0.015); const m = new THREE.Mesh(geo, glass(0.55, '#1b2a7a')); g.add(m); g.add(edge(geo, '#9fb4ff', 0.6));
+  const strip = new THREE.Mesh(new THREE.BoxGeometry(0.012, DH - 0.1, 0.05), new THREE.MeshBasicMaterial({ color: CY, toneMapped: false })); strip.position.x = -s * (DW / 2 - 0.01); g.add(strip);
+  return { g, s }; });
+const shaft = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 2.1), new THREE.MeshBasicMaterial({ color: '#02030a' })); shaft.position.set(0, DH / 2, WZ - 0.4); scene.add(shaft);
+const doorAt = open => doors.forEach(({ g, s }) => g.position.set(s * (DW / 2 + open * (DW - 0.04)), DH / 2, WZ + 0.01 + (open > 0.02 ? -0.05 : 0)));
+// the button panel, right of the doors
+const PX = 0.88, PY = 1.15; const pnl = new THREE.Group(); pnl.position.set(PX, PY, WZ + 0.02); scene.add(pnl);
+const pnlM = new THREE.MeshPhysicalMaterial({ color: '#232c6e', metalness: 0.6, roughness: 0.3, transparent: true, opacity: 1, emissive: '#0a1030', emissiveIntensity: 0.5, depthWrite: false });
+{ const g = new RoundedBoxGeometry(0.34, 0.86, 0.03, 3, 0.02); pnl.add(new THREE.Mesh(g, pnlM)); pnl.add(edge(g, CY, 0.8)); }
+const BTN = []; const mkBtn = (x, y, r, col) => { const b = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.03, 32), new THREE.MeshStandardMaterial({ color: '#2b3478', metalness: 0.5, roughness: 0.3, emissive: col, emissiveIntensity: 0.15 })); b.rotation.x = Math.PI / 2; b.position.set(x, y, 0.03); pnl.add(b);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(r * 0.98, r * 1.18, 40), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.5, toneMapped: false })); ring.position.set(x, y, 0.047); pnl.add(ring); return { b, ring, col }; };
+for (let i = 0; i < 4; i++) { const r = Math.floor(i / 2), c = i % 2; mkBtn(-0.07 + c * 0.14, 0.3 - r * 0.15, 0.04, '#9fb4ff'); }
+const icon = (draw) => { const t = canvasTex(256, 256); t.draw(draw); const m = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1), new THREE.MeshBasicMaterial({ map: t.tex, transparent: true, toneMapped: false, depthWrite: false })); return m; };
+const arrows = (x, close, col) => { x.clearRect(0, 0, 256, 256); x.fillStyle = col; const tri = (cx, dir) => { x.beginPath(); x.moveTo(cx, 128); x.lineTo(cx - dir * 60, 68); x.lineTo(cx - dir * 60, 188); x.closePath(); x.fill(); };
+  if (close) { tri(118, 1); tri(138, -1); } else { tri(60, -1); tri(196, 1); } x.fillRect(124, 50, 8, 156); };
+const OPENB = mkBtn(-0.08, -0.12, 0.055, '#9fb4ff'); { const ic = icon((x) => arrows(x, false, '#c8ceff')); ic.position.set(-0.08, -0.12, 0.05); pnl.add(ic); }
+const CLOSE = mkBtn(0.075, -0.12, 0.065, AM); { const ic = icon((x) => arrows(x, true, '#fff3dc')); ic.position.set(0.075, -0.12, 0.05); ic.scale.setScalar(1.15); pnl.add(ic); }
+CLOSE.b.material.color.set('#7a5a22');
+// fire-service keyhole under the buttons
+const keyhole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.02, 24), new THREE.MeshStandardMaterial({ color: '#b02a3a', emissive: RD, emissiveIntensity: 0.3 })); keyhole.rotation.x = Math.PI / 2; keyhole.position.set(0, -0.31, 0.03); pnl.add(keyhole);
+const fireKey = new THREE.Group(); { const km = new THREE.MeshBasicMaterial({ color: new THREE.Color('#ff5a3c').multiplyScalar(1.25), toneMapped: false }), bm = new THREE.MeshBasicMaterial({ color: new THREE.Color(AM).multiplyScalar(1.2), toneMapped: false });
+  const bow = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.016, 10, 28), km); bow.position.y = 0.09; fireKey.add(bow);
+  const shaftK = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.12, 0.014), bm); shaftK.position.y = 0.0; fireKey.add(shaftK);
+  for (const [yy, ww] of [[-0.035, 0.03], [-0.055, 0.022]]) { const tooth = new THREE.Mesh(new THREE.BoxGeometry(ww, 0.012, 0.014), bm); tooth.position.set(ww / 2 + 0.006, yy, 0); fireKey.add(tooth); } }
+fireKey.scale.setScalar(1.1);
+fireKey.position.set(0, -0.31 + 0.06, 0.09); pnl.add(fireKey);
+const CLW = new THREE.Vector3(PX + 0.075, PY - 0.12, WZ + 0.06); // close button, world
+
+// ---------- the x-ray inside the wall: controller with a timer lock, wire to the door motor ----------
+const CTX = 1.08, CTY = 0.6; const ctl = new THREE.Group(); ctl.position.set(CTX, CTY, WZ - 0.12); scene.add(ctl);
+{ const g = new RoundedBoxGeometry(0.42, 0.34, 0.12, 3, 0.02); ctl.add(new THREE.Mesh(g, glass(0.6, '#1a1f5c'))); ctl.add(edge(g, PU, 0.9)); }
+const TD = canvasTex(512, 420); const tdMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.33), new THREE.MeshBasicMaterial({ map: TD.tex, transparent: true, toneMapped: false, depthWrite: false })); tdMesh.position.z = 0.065; ctl.add(tdMesh);
+const motor = new THREE.Group(); motor.position.set(0, 2.32, WZ - 0.12); scene.add(motor);
+{ const g = new RoundedBoxGeometry(0.5, 0.16, 0.14, 3, 0.02); motor.add(new THREE.Mesh(g, glass(0.6, '#1a1f5c'))); motor.add(edge(g, CY, 0.8)); }
+const gearM = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.014, 8, 12), new THREE.MeshBasicMaterial({ color: CY, toneMapped: false })); gearM.position.z = 0.075; motor.add(gearM);
+const pA = new THREE.CatmullRomCurve3([CLW.clone().add(v3([0, 0, -0.08])), v3([PX + 0.075, PY - 0.3, WZ - 0.1]), v3([CTX - 0.08, CTY + 0.2, WZ - 0.12]), v3([CTX, CTY + 0.05, WZ - 0.12])]);
+const pB = new THREE.CatmullRomCurve3([v3([CTX, CTY + 0.17, WZ - 0.12]), v3([1.3, 1.6, WZ - 0.12]), v3([1.0, 2.32, WZ - 0.12]), v3([0.25, 2.32, WZ - 0.12])]);
+const wire = (c, col) => { const m = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.3, toneMapped: false, depthWrite: false }); const w = new THREE.Mesh(new THREE.TubeGeometry(c, 80, 0.008, 6), m); scene.add(w); return m; };
+const wA = wire(pA, AM), wB = wire(pB, CY);
+const pulse = glowSprite('rgba(255,181,71,1)', 0.42, 0); scene.add(pulse); const pulseCore = new THREE.Mesh(new THREE.SphereGeometry(0.03, 12, 8), new THREE.MeshBasicMaterial({ color: '#fff0c8', toneMapped: false })); scene.add(pulseCore);
+const lockGlow = glowSprite('rgba(255,59,92,1)', 0.7, 0); lockGlow.position.set(CTX + 0.08, CTY, WZ - 0.02); scene.add(lockGlow);
+const btnGlow = glowSprite('rgba(255,181,71,1)', 0.5, 0); btnGlow.position.copy(CLW); scene.add(btnGlow);
+
+// ---------- YOU ----------
+const guy = makeToon('guy'); guy.root.position.set(0.3, 0, -0.08); guy.root.rotation.y = 1.25; scene.add(guy.root);
+const youTag = (() => { const t = canvasTex(256, 128); t.draw((x, w, h) => { x.fillStyle = '#c9a36b'; x.beginPath(); x.roundRect(8, 8, w - 16, h - 16, 18); x.fill(); txt(x, 'YOU', w / 2 + 8, h / 2 + 4, 70, '#2a1c08', { dir: 'ltr', font: 'Poppins' }); });
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t.tex, toneMapped: false, depthTest: false })); s.scale.set(0.24, 0.12, 1); s.renderOrder = 5; s.position.set(0.02, 0.72, 0.1); scene.add(s); return s; })();
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  close: wt(0, 'close'), anything: wt(0, 'anything'),
+  l2: L[1].start, inW: wt(1, 'In'), often: wt(1, 'not'), notW: wt(1, 'away'), timer: wt(1, 'timer'), decides: wt(1, 'decides'),
+  l3: L[2].start, law: wt(2, 'law'), doorsW: wt(2, 'doors'), open3: wt(2, 'open'), least: wt(2, 'least'), three: wt(2, 'three'), seconds: wt(2, 'seconds'),
+  l4: L[3].start, pressing: wt(3, 'Pressing'), cant: wt(3, "can't"), cut: wt(3, 'cut'), short: wt(3, 'short'),
+  l5: L[4].start, wired: wt(4, 'wired'), fire: wt(4, 'Firefighters'), use: wt(4, 'use'), keyW: wt(4, 'key'),
+  l6: L[5].start, works: wt(5, 'works'), just: wt(5, 'Just'), notY: wt(5, 'not'), your: wt(5, 'your'), you: wt(5, 'schedule'),
+  slam: L[0].end + 0.06,
+}), () => { buildCam(); buildPress(); });
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.l6, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+let CK = [];
+function buildCam() {
+  CK = [
+    [-0.2, [0.3, 1.58, 2.55], [0.62, 1.45, WZ]],
+    [B.close, [0.38, 1.56, 2.25], [0.66, 1.41, WZ]],
+    [B.slam - 0.05, [0.46, 1.52, 2.0], [0.72, 1.37, WZ]],
+    [B.slam + 0.45, [1.0, 1.2, 1.3], [1.0, 1.12, WZ - 0.1], 'whip'],
+    [B.timer, [1.04, 1.02, 1.1], [1.06, 0.98, WZ - 0.1]],
+    [B.l3 - 0.1, [1.05, 1.0, 1.0], [1.07, 0.95, WZ - 0.1]],
+    [B.l3 + 0.45, [0.45, 1.3, 3.5], [0.45, 1.12, WZ], 'whip'],
+    [B.l4 - 0.1, [0.5, 1.26, 3.2], [0.47, 1.1, WZ]],
+    [B.l4 + 0.45, [1.0, 1.08, 1.4], [1.0, 1.02, WZ - 0.1], 'whip'],
+    [B.fire - 0.1, [1.0, 1.05, 1.3], [1.0, 1.0, WZ - 0.1]],
+    [B.fire + 0.4, [1.0, 0.98, 1.3], [0.99, 0.94, WZ], 'whip'],
+    [B.keyW + 0.4, [1.0, 0.98, 1.2], [0.99, 0.94, WZ]],
+    [B.keyW + 0.7, [0.4, 1.45, 3.4], [0.4, 1.3, WZ], 'whip'],
+    [B.l6 + 0.3, [0.42, 1.43, 3.2], [0.42, 1.28, WZ]],
+    [B.just + 0.3, [0.42, 1.45, 2.8], [0.55, 1.2, WZ]],
+    [B.sig - 0.05, [0.4, 1.46, 2.65], [0.55, 1.22, WZ]],
+    [B.sig + 0.5, [0.3, 2.6, 2.4], [0.5, 1.1, WZ], 'whip'],
+    [B.end + 1, [0.3, 2.7, 2.3], [0.5, 1.1, WZ]],
+  ]; }
+
+// presses: [time, kind] kind 'hook' (✕ on the button), 'block' (pulse bounces off the timer lock), 'fire' (pulse runs to the motor)
+let PR = [];
+function buildPress() { PR = [[-0.1, 'hook'], [0.32, 'hook'], [0.62, 'hook'], [B.close - 0.05, 'hook'], [B.anything, 'hook'],
+  [B.l2 + 0.2, 'block'], [B.timer, 'block'], [B.pressing - 0.05, 'block'], [B.pressing + 0.42, 'block'], [B.cut - 0.05, 'block'], [B.short + 0.2, 'block'], [B.keyW + 0.1, 'fire'], [B.you - 0.05, 'block']]; }
+const lastPress = t => { let p = null; for (const q of PR) if (t >= q[0]) p = q; return p; };
+const fireA = t => seg(t, B.keyW - 0.15, 0.35) * (1 - seg(t, B.just - 0.1, 0.2)); // fire mode (key turned) until line 6
+const TH0 = () => B.three - 0.35; const remain = t => clamp(3 - (t - TH0()), 0, 3);
+const doorOpenAt = t => { const shut0 = TH0() + 3.15; // normal close after the hold, slow; fire press closes fast; reopens on line 6
+  let o = 1 - eio(seg(t, B.keyW + 0.72, 0.3)); if (t > B.just + 0.1) o = eio(seg(t, B.just + 0.1, 0.6)); return o; };
+
+function drawTimer(t) {
+  const xr = xray(t); const r = remain(t), running = t > TH0() && t < TH0() + 3.05, fa = fireA(t);
+  TD.draw((x, w, h) => { x.clearRect(0, 0, w, h); x.globalAlpha = xr; x.fillStyle = 'rgba(6,9,32,0.9)'; x.beginPath(); x.roundRect(4, 4, w - 8, h - 8, 36); x.fill();
+    x.font = '700 44px Poppins'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillStyle = '#aab3e8'; x.fillText('DOOR TIMER', w / 2, 52);
+    const cx = w / 2 - 70, cy = 240, R = 110; x.lineWidth = 22; x.strokeStyle = 'rgba(155,107,255,0.25)'; x.beginPath(); x.arc(cx, cy, R, 0, 7); x.stroke();
+    const frac = t < TH0() ? 1 : r / 3; x.strokeStyle = AM; x.shadowColor = AM; x.shadowBlur = 20; x.beginPath(); x.arc(cx, cy, R, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2); x.stroke(); x.shadowBlur = 0;
+    x.fillStyle = '#ffffff'; x.font = '700 120px Poppins'; x.fillText(t < TH0() ? '3' : String(Math.ceil(r - 1e-3)), cx, cy + 6);
+    // the lock
+    const lx = w / 2 + 140, ly = 250, open = fa; const lc = open > 0.5 ? CY : RD; x.strokeStyle = lc; x.lineWidth = 18; x.beginPath(); x.arc(lx, ly - 50 - open * 30, 42, Math.PI, 0); x.lineTo(lx + 42, ly - 50 - open * 30 + (open > 0.5 ? -10 : 30)); x.stroke();
+    x.fillStyle = lc; x.shadowColor = lc; x.shadowBlur = 24; x.beginPath(); x.roundRect(lx - 62, ly - 30, 124, 110, 18); x.fill(); x.shadowBlur = 0; x.fillStyle = '#0a0f2e'; x.beginPath(); x.arc(lx, ly + 20, 14, 0, 7); x.fill();
+    x.globalAlpha = 1; });
+}
+const xray = t => t < B.slam ? 0.0 : eio(seg(t, B.slam, 0.4)) * (1 - seg(t, B.sig, 0.3));
+function props(t) {
+  doorAt(doorOpenAt(t));
+  const xr = xray(t); pnlM.opacity = 1 - 0.7 * xr; wallM.opacity = 1 - 0.78 * xr; drawTimer(t);
+  wA.opacity = 0.12 + 0.45 * xr; wB.opacity = ((0.08 + 0.3 * xr) * (0.5 + 0.5 * fireA(t)) + 0.3 * fireA(t) * xr) * (t > B.l6 && t < B.sig ? 0.25 : 1);
+  gearM.rotation.z = -t * 1.5 - 14 * Math.max(0, Math.min(t, B.keyW + 1.05) - (B.keyW + 0.72)) - (t > B.just + 0.1 ? Math.min(t - B.just - 0.1, 0.6) * 10 : 0);
+  // press feedback
+  const p = lastPress(t); let pa = 0, ppos = null, lockF = 0, xF = 0;
+  if (p) { const age = t - p[0]; const glow = Math.exp(-age * 7); CLOSE.ring.material.opacity = 0.5 + 0.5 * glow; CLOSE.b.material.emissiveIntensity = 0.15 + 1.6 * glow; btnGlow.material.opacity = 0.7 * glow;
+    if (p[1] === 'hook') xF = age < 0.45 ? 1 - seg(age, 0.3, 0.15) : 0;
+    if (p[1] !== 'hook' && xr > 0.2) { const d = 0.32; if (age < d) { ppos = pA.getPointAt(eio(age / d)); pa = 1; }
+      else if (p[1] === 'block') { lockF = Math.exp(-(age - d) * 6); if (age < d + 0.28) { ppos = pA.getPointAt(1 - 0.35 * eo((age - d) / 0.28)); pa = 1 - (age - d) / 0.28; } }
+      else if (age < d + 0.45) { ppos = pB.getPointAt(eio((age - d) / 0.45)); pa = 1; } } }
+  else { btnGlow.material.opacity = 0; }
+  pulse.visible = pulseCore.visible = !!ppos; if (ppos) { pulse.position.copy(ppos); pulseCore.position.copy(ppos); pulse.material.opacity = 0.9 * pa; pulse.material.color.set(p && p[1] === 'block' && t - p[0] > 0.32 ? '#ff8a9c' : '#ffffff'); }
+  lockGlow.material.opacity = 0.8 * lockF * xr; window.__xF = xF;
+  // fire key: slides in on "Firefighters", turns on "key"
+  const kin = eio(seg(t, B.fire - 0.1, 0.35)) * (1 - seg(t, B.just - 0.1, 0.3)); fireKey.visible = kin > 0.01; fireKey.position.z = 0.25 - 0.17 * kin; fireKey.rotation.z = -Math.PI / 2 * eio(seg(t, B.keyW - 0.15, 0.3));
+  keyhole.material.emissiveIntensity = 0.3 + 1.2 * kin;
+  // YOU: jabs the button on every press
+  let jab = 0; if (p) { const age = t - p[0] + 0.12; jab = age > 0 && age < 0.3 ? Math.sin(age / 0.3 * Math.PI) : 0; }
+  const fireWin = t > B.fire && t < B.keyW + 0.05;
+  const mood = t > B.l6 + 0.3 ? 'worried' : (t > B.notW - 0.1 && t < B.l3) ? 'surprised' : t > B.fire && t < B.l6 ? 'surprised' : (t < B.slam ? 'angry' : 'neutral');
+  guy.update(t, { pose: fireWin ? 'surprised' : 'point', mood, headTurn: 0 });
+  if (!fireWin) guy.armR.rotation.set(-1.45 - 0.08 * jab, 0.25, -0.2); guy.root.position.z = -0.08 + 0.04 * jab;
+  youTag.visible = false; window.__you = (t < B.slam) || t > B.l6 - 0.1;
+}
+
+// ---------- type ----------
+function drawType(t) {
+  { const g = ui.createLinearGradient(0, 0, 0, 780); g.addColorStop(0, 'rgba(2,3,12,0.5)'); g.addColorStop(1, 'rgba(2,3,12,0)'); ui.fillStyle = g; ui.fillRect(0, 0, W, 780); }
+  // frame 0: the whole question is already on screen; it breathes, CLOSE flashes on every press, and it is blown away on the slam
+  if (t < B.slam + 0.22) { const bl = seg(t, B.slam, 0.2); const p = lastPress(t); const kick = p ? Math.exp(-(t - p[0]) * 8) : 0;
+    ui.save(); ui.translate(540, 470); const s0 = (1 + 0.015 * Math.sin(t * 5)) * (1 + bl * 0.5); ui.scale(s0, s0); ui.translate(-540, -470); ui.globalAlpha = 1 - bl;
+    const o = { from: 1.0 };
+    line([['DOES', -1], ['YOUR', -1], ["ELEVATOR'S", -1]], 300, 105, 5, o);
+    ui.save(); ui.translate(540, 455); ui.scale(1 + 0.07 * kick, 1 + 0.07 * kick); ui.translate(-540, -455); line([['CLOSE', -1, AM], ['BUTTON', -1]], 455, 170, 5, o); ui.restore();
+    line([['DO', -1], ['ANYTHING?', -1, CY]], 610, 130, 5, o); ui.restore(); }
+  // ✕ over the button area on hook presses
+  if (window.__xF > 0.01 && t < B.slam) { const v = CLW.clone().project(cam); const sx = (v.x + 1) / 2 * W, sy = (1 - v.y) / 2 * H; ui.save(); ui.globalAlpha = window.__xF; ui.translate(sx + 70, sy - 150); ui.strokeStyle = RD; ui.shadowColor = RD; ui.shadowBlur = 30; ui.lineWidth = 34; ui.lineCap = 'round'; ui.beginPath(); ui.moveTo(-68, -68); ui.lineTo(68, 68); ui.moveTo(68, -68); ui.lineTo(-68, 68); ui.stroke(); ui.restore(); }
+  superAt(t, 'IN THE U.S.', B.inW - 0.05, B.timer - B.inW - 0.05, 300, 120, CY);
+  superAt(t, 'NOT RIGHT AWAY', B.often - 0.05, B.timer - B.often - 0.05, 450, 140, RD);
+  superAt(t, 'A TIMER DECIDES', B.timer - 0.05, B.l3 - B.timer + 0.05, 300, 130, AM);
+  superAt(t, 'DOORS STAY OPEN', B.doorsW - 0.05, B.least - B.doorsW + 0.05, 300, 120);
+  superAt(t, 'AT LEAST', B.least - 0.1, B.l4 - B.least + 0.15, 370, 110);
+  if (t > B.three - 0.05 && t < B.l4) { const r = 3, a = clamp((t - B.three + 0.05) / 0.1) * clamp((B.l4 - t) / 0.15); const k = 1 + 0.25 * Math.exp(-(t - B.three) * 9); ui.save(); ui.globalAlpha = a; ui.translate(500, 560); ui.scale(k, k); ui.font = '700 230px Poppins'; ui.textAlign = 'center'; ui.textBaseline = 'middle'; ui.shadowColor = 'rgba(0,0,0,0.8)'; ui.shadowBlur = 40; ui.fillStyle = r > 0 ? '#ffffff' : RD; ui.fillText(String(r), 0, 0); ui.font = '700 100px Poppins'; ui.fillStyle = AM; ui.shadowColor = AM; ui.shadowBlur = 30; ui.textAlign = 'left'; ui.fillText('SEC', 85, 30); ui.restore(); }
+  superAt(t, 'PRESS CLOSE…', B.pressing - 0.05, B.cant - B.pressing, 300, 140, AM);
+  superAt(t, "CAN'T CUT IT SHORT", B.cant - 0.05, B.l5 - B.cant + 0.05, 300, 115, RD);
+  superAt(t, 'STILL WIRED', B.wired - 0.05, B.fire - B.wired, 300, 150, CY);
+  superAt(t, 'FIREFIGHTERS', B.fire - 0.05, B.keyW - B.fire, 300, 150, RD);
+  superAt(t, '+ KEY', B.keyW - 0.05, B.l6 - B.keyW + 0.05, 300, 190, RD);
+  if (t > B.works - 0.1 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) }; line([['IT', B.l6 - 0.05], ['WORKS.', B.works - 0.05, CY]], 420, 150, t, o); line([['JUST', B.just - 0.05], ['NOT', B.notY - 0.05], ['ON', B.notY + 0.12]], 570, 120, t, o); line([['YOUR', B.your - 0.05], ['SCHEDULE.', B.you - 0.05, AM]], 700, 120, t, o); }
+  const fa = (t > B.l2 && t < B.sig) ? clamp((t - B.l2) / 0.3) * clamp((B.sig - t) / 0.2) : 0;
+  note(t > B.l3 && t < B.l4 ? 'US accessibility rules (ADA) · US Access Board guide' : 'Illustrative model · US rules (ADA)', fa, 1440);
+  if (window.__you && t < B.sig + 0.2) { const v = new THREE.Vector3(); guy.body.getWorldPosition(v); v.y += 0.7; v.project(cam); const sx = clamp((v.x + 1) / 2 * W - 150, 90, 990), sy = clamp((1 - v.y) / 2 * H, 760, 1340); ui.save(); ui.globalAlpha = clamp((B.sig + 0.2 - t) / 0.2); ui.fillStyle = '#c9a36b'; ui.beginPath(); ui.roundRect(sx - 75, sy - 34, 150, 68, 16); ui.fill(); ui.font = '700 46px Poppins'; ui.textAlign = 'center'; ui.textBaseline = 'middle'; ui.fillStyle = '#2a1c08'; ui.fillText('YOU', sx, sy + 3); ui.restore(); }
+}
+
+// ---------- sound cue sheet (clean tonal only) ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  for (const [pt, k] of PR) ev(Math.max(0, pt), 'click', k === 'hook' ? 0.9 : 0.8);
+  for (const [pt, k] of PR) if (k === 'hook') ev(Math.max(0, pt) + 0.03, 'pop2', 0.7); else if (k === 'block') ev(pt + 0.33, 'pop', 0.7);
+  ev(B.slam, 'slam', 1.2); ev(B.slam, 'whoosh', 1); ev(B.inW - 0.05, 'super', 0.8); ev(B.often - 0.05, 'slam', 0.7); ev(B.timer - 0.05, 'ping', 0.8);
+  ev(B.l3 + 0.1, 'whoosh'); ev(B.doorsW - 0.05, 'super', 0.7); ev(B.three, 'pop', 0.9); for (let i = 1; i <= 3; i++) ev(TH0() + i, 'tick', 0.7);
+  ev(B.l4 + 0.1, 'whoosh'); ev(B.cant - 0.05, 'super', 0.8);
+  ev(B.l5 + 0.1, 'whoosh'); ev(B.wired - 0.05, 'ping', 0.8); ev(B.fire - 0.05, 'pop', 0.9); ev(B.keyW - 0.05, 'card', 0.9); ev(B.keyW + 0.72, 'swish', 0.9); ev(B.keyW + 1.02, 'slam', 0.8); ev(B.just + 0.1, 'swish', 0.6);
+  ev(B.l6 + 0.1, 'whoosh', 0.9); ev(B.works - 0.05, 'pop2', 0.8); ev(B.you - 0.05, 'slam', 0.7);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.slam, B.keyW + 1.02] }); props(t);
+  bloom.strength = 0.6 + (t > B.slam ? 0.45 * Math.exp(-(t - B.slam) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawType(t); signature(t, '', RD); note('Illustrative model · US rules (ADA)', clamp((t - B.sig - 0.38) / 0.18), 1440); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>
