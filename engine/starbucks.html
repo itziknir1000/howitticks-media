@@ -1,0 +1,181 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// Why does Starbucks need your name? One thread: the amber name. It is written on the cup, called out as an amber sound wave,
+// cuts through grey café noise that YOU's brain tunes out, lights up the brain, and makes YOU turn around.
+import { makeToon } from './toon.js';
+import { THREE, RoundedBoxGeometry, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex, txt } from './common.js';
+import { B, v3, installTimeline, stage, glowSprite, camAt, line, superAt, signature, sigEvents, filmLook, eventsHelper, CY, PU, RD, AM } from './hit.js';
+const note = (str, a, y) => { if (a <= 0) return; ui.save(); ui.globalAlpha = a; ui.font = '500 38px Poppins'; const w = ui.measureText(str).width + 52; ui.fillStyle = 'rgba(3,5,18,0.72)'; ui.beginPath(); ui.roundRect(540 - w / 2, y - 30, w, 58, 29); ui.fill(); ui.fillStyle = '#c8ceff'; ui.textAlign = 'center'; ui.textBaseline = 'middle'; ui.fillText(str, 540, y); ui.restore(); };
+
+bloom.threshold = 0.8; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.75; key.castShadow = false;
+stage();
+const edge = (g, col = CY, op = 0.7) => new THREE.LineSegments(new THREE.EdgesGeometry(g, 20), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: op, toneMapped: false }));
+
+// ---------- the counter and the cup (no logo: a plain cup with a hand-written name) ----------
+const counterM = new THREE.MeshStandardMaterial({ color: '#141b4d', roughness: 0.5, metalness: 0.3, emissive: '#070b2a', emissiveIntensity: 0.6 });
+{ const g = new RoundedBoxGeometry(1.7, 1.0, 0.6, 3, 0.03); const m = new THREE.Mesh(g, counterM); m.position.set(-0.75, 0.5, -0.45); scene.add(m); const e = edge(g, CY, 0.4); e.position.copy(m.position); scene.add(e); }
+const CUP = new THREE.Group(); CUP.position.set(-0.32, 1.0, -0.3); scene.add(CUP);
+const NT = canvasTex(1024, 512);
+const drawName = (prog, glow) => NT.draw((x, w, h) => { x.fillStyle = '#eef0fa'; x.fillRect(0, 0, w, h); x.fillStyle = '#d8dcef'; x.fillRect(0, h * 0.1, w, 8); x.fillRect(0, h * 0.9, w, 8);
+  x.save(); x.beginPath(); x.rect(350, 0, 340 * clamp(prog), h); x.clip(); x.font = '700 150px Poppins'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillStyle = '#d98a12'; x.shadowColor = AM; x.shadowBlur = 40 * glow; x.save(); x.translate(520, 175); x.rotate(-0.08); x.fillText('YOU', 0, 0); x.restore();
+  x.strokeStyle = '#d98a12'; x.lineWidth = 14; x.lineCap = 'round'; x.beginPath(); x.moveTo(400, 270); x.quadraticCurveTo(520, 295, 640, 260); x.stroke(); x.restore(); });
+drawName(0.35, 0);
+const cupPts = [[0.001, 0], [0.13, 0], [0.165, 0.42], [0.17, 0.44], [0.001, 0.44]].map(p => new THREE.Vector2(p[0], p[1]));
+const cupM = new THREE.MeshStandardMaterial({ color: '#ffffff', map: NT.tex, roughness: 0.45, emissive: '#3a3f6a', emissiveIntensity: 0.25 });
+{ const body = new THREE.Mesh(new THREE.CylinderGeometry(0.165, 0.13, 0.42, 48, 1, true), cupM); body.position.y = 0.21; CUP.add(body);
+  const bot = new THREE.Mesh(new THREE.CircleGeometry(0.13, 32), cupM); bot.rotation.x = Math.PI / 2; CUP.add(bot);
+  const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.168, 0.175, 0.05, 48), new THREE.MeshStandardMaterial({ color: '#2a2f60', roughness: 0.4, emissive: '#10143a' })); lid.position.y = 0.445; CUP.add(lid);
+  const dome = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.165, 0.04, 48), lid.material); dome.position.y = 0.49; CUP.add(dome);
+  const sl = new THREE.Mesh(new THREE.CylinderGeometry(0.162, 0.143, 0.17, 48, 1, true), new THREE.MeshStandardMaterial({ color: '#2b3478', roughness: 0.6, emissive: '#141a50' })); sl.position.y = 0.12; sl.scale.setScalar(1.012); CUP.add(sl); }
+const cupGlow = glowSprite('rgba(255,181,71,1)', 0.9, 0); cupGlow.position.set(-0.32, 1.28, -0.2); scene.add(cupGlow);
+// marker
+const marker = new THREE.Group(); { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.22, 16), new THREE.MeshStandardMaterial({ color: '#1a1d33', roughness: 0.4 })); marker.add(m); const tip = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.04, 16), new THREE.MeshBasicMaterial({ color: '#d98a12', toneMapped: false })); tip.position.y = -0.13; tip.rotation.x = Math.PI; marker.add(tip); }
+scene.add(marker);
+
+// ---------- people ----------
+const barista = makeToon({ skin: '#d9a07a', hair: '#3a2416', shirt: '#2e8a6a', pants: '#1f2547', shoes: '#222', hairStyle: 'long' }); barista.root.position.set(-0.95, 0, -1.05); barista.root.rotation.y = 0.35; scene.add(barista.root);
+const grey = c => ({ skin: '#5b6190', hair: '#2a2f55', shirt: c, pants: '#1f2547', shoes: '#2a2f55', hairStyle: 'short' });
+const crowd = [makeToon(grey('#3a4170')), makeToon({ ...grey('#454c80'), hairStyle: 'long' })]; crowd[0].root.position.set(-0.72, 0, 0.5); crowd[0].root.rotation.y = 1.3; crowd[1].root.position.set(-1.45, 0, -1.3); crowd[1].root.rotation.y = 2.5; crowd.forEach(c => scene.add(c.root));
+const guy = makeToon('guy'); guy.root.position.set(0.32, 0, 0.35); scene.add(guy.root);
+const FACE_AWAY = 1.15, FACE_CUP = -1.05;
+// x-ray brain inside YOU's head (illustrative)
+const brain = new THREE.Group(); brain.renderOrder = 4; scene.add(brain);
+const brainM = new THREE.MeshBasicMaterial({ color: new THREE.Color(PU), transparent: true, opacity: 0, toneMapped: false, depthTest: false });
+const brainE = new THREE.LineBasicMaterial({ color: '#c9b4ff', transparent: true, opacity: 0, toneMapped: false, depthTest: false });
+for (const s of [-1, 1]) { const g = new THREE.SphereGeometry(0.1, 14, 10); const m = new THREE.Mesh(g, brainM); m.scale.set(0.85, 0.8, 1.2); m.position.x = s * 0.06; m.renderOrder = 4; brain.add(m); const e = new THREE.LineSegments(new THREE.WireframeGeometry(g), brainE); e.scale.copy(m.scale); e.position.copy(m.position); e.renderOrder = 5; brain.add(e); }
+const skullX = new THREE.Mesh(new THREE.SphereGeometry(0.29, 32, 20), new THREE.MeshBasicMaterial({ color: '#3EE6FF', transparent: true, opacity: 0, toneMapped: false, depthWrite: false, blending: THREE.AdditiveBlending })); skullX.renderOrder = 3; scene.add(skullX);
+const brainGlow = glowSprite('rgba(255,181,71,1)', 0.42, 0); brainGlow.material.depthTest = false; brainGlow.renderOrder = 6; scene.add(brainGlow);
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  starb: wt(0, 'Starbucks'), need0: wt(0, 'need'), name0: wt(0, 'name'),
+  l2: L[1].start, hint: wt(1, 'Hint'), about: wt(1, 'about'), brain: wt(1, 'brain'),
+  l3: L[2].start, tunes: wt(2, 'tunes'), noise: wt(2, 'noise'), cafe: wt(2, 'cafe'),
+  l4: L[3].start, but: wt(3, 'But'), catches: wt(3, 'catch'), own: wt(3, 'own'), name4: wt(3, 'name'),
+  l5: L[4].start, call: wt(4, 'call'), you5: wt(4, 'you'), not5: wt(4, 'not'), latte: wt(4, 'latte'),
+  l6: L[5].start, isnt: wt(5, "isn't"), label: wt(5, 'label'), they2: wt(5, "It's"), makes: wt(5, 'makes'), you6: wt(5, 'you', 1), turn: wt(5, 'turn'), around: wt(5, 'around'),
+  slam: L[0].end + 0.06,
+}), () => { buildCam(); buildWaves(); });
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.l6, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+const HEAD = () => { const v = new THREE.Vector3(); guy.head.getWorldPosition(v); return v; };
+let CK = [];
+function buildCam() {
+  CK = [
+    [-0.2, [-0.2, 1.6, 2.75], [-0.18, 1.22, -0.25]],
+    [B.name0, [-0.16, 1.58, 2.45], [-0.15, 1.22, -0.25]],
+    [B.slam - 0.05, [-0.12, 1.57, 2.3], [-0.12, 1.23, -0.25]],
+    [B.slam + 0.42, [0.47, 1.75, 2.1], [0.32, 1.5, 0.35], 'whip'],
+    [B.l3 - 0.1, [0.47, 1.72, 1.9], [0.32, 1.5, 0.35]],
+    [B.l3 + 0.45, [-0.12, 1.75, 3.45], [-0.1, 1.3, 0.35], 'whip'],
+    [B.l4 - 0.1, [-0.08, 1.73, 3.25], [-0.07, 1.3, 0.35]],
+    [B.l4 + 0.4, [0.42, 1.75, 2.0], [0.32, 1.5, 0.35], 'whip'],
+    [B.l5 - 0.1, [0.42, 1.72, 1.85], [0.32, 1.5, 0.35]],
+    [B.l5 + 0.45, [-0.05, 1.75, 3.35], [-0.03, 1.3, 0.0], 'whip'],
+    [B.l6 - 0.05, [-0.02, 1.73, 3.15], [-0.01, 1.3, 0.0]],
+    [B.they2 - 0.05, [0.0, 1.7, 3.0], [0.0, 1.3, 0.0]],
+    [B.turn + 0.25, [0.0, 1.5, 2.45], [-0.05, 1.32, 0.1], 'whip'],
+    [B.sig - 0.05, [-0.02, 1.5, 2.3], [-0.06, 1.32, 0.1]],
+    [B.sig + 0.5, [0.2, 2.7, 2.2], [0.2, 1.1, 0], 'whip'],
+    [B.end + 1, [0.2, 2.8, 2.1], [0.2, 1.1, 0]],
+  ]; }
+
+// sound packets: [start, kind, label]. 'noise' grey and tuned out at the head; 'name' amber, gets through and lights the brain; 'latte' grey called word
+let WV = []; const TRAVEL = 0.8;
+function buildWaves() { WV = [];
+  for (let k = 0; k < 9; k++) WV.push([B.l3 - 0.2 + k * 0.28, 'noise', k % 3 === 0 ? 'blah' : '']);
+  WV.push([B.l4 - 0.1, 'noise', 'blah']); WV.push([B.l4 + 0.25, 'noise', '']); WV.push([B.l4 + 0.55, 'noise', '']);
+  WV.push([B.name4 - TRAVEL, 'name', 'YOU']);
+  WV.push([B.call - 0.2, 'name', 'YOU!']); WV.push([B.latte - 0.55, 'latte', 'LATTE!']);
+  WV.push([B.they2 - 0.75, 'name', 'YOU!']);
+}
+const lastName = t => { let h = null; for (const w of WV) if (w[1] === 'name' && t >= w[0] + TRAVEL) h = w[0] + TRAVEL; return h; };
+const xray = t => t < B.slam ? 0 : eio(seg(t, B.slam, 0.35)) * (1 - seg(t, B.l6 + 0.2, 0.4));
+
+function props(t) {
+  // cup turns slowly; marker writes the name from frame 0
+  CUP.rotation.y = Math.PI - 0.25 + 0.15 * Math.sin(t * 1.4);
+  const wr = clamp(0.4 + t / 1.0); const lh = lastName(t); const nameGlow = t > B.l5 ? Math.max(lh ? Math.exp(-(t - lh) * 3) : 0, t > B.l6 ? 0.8 : 0) : 0;
+  drawName(wr, nameGlow + (t < B.slam ? 1 : 0)); if (t < B.slam) { cupGlow.material.opacity = 0.35; } cupM.emissiveIntensity = 0.25 + 0.5 * nameGlow; cupGlow.material.opacity = 0.55 * nameGlow + (t > B.l6 ? 0.3 : 0);
+  const mw = clamp(t / 1.2); marker.visible = t < B.slam + 0.1; marker.position.set(-0.32 + lerp(-0.08, 0.1, mw) + 0.015 * Math.sin(t * 30), 1.25 + 0.02 * Math.sin(t * 22), -0.1); marker.rotation.set(0.4, 0, -0.5 + 0.1 * Math.sin(t * 18));
+  // YOU: back to the counter, turns around at the end
+  const turnU = eio(seg(t, B.turn - 0.15, 0.45)); guy.root.rotation.y = lerp(FACE_AWAY, FACE_CUP, turnU);
+  const lit = lh ? Math.exp(-(t - lh) * 1.2) : 0;
+  const mood = t > B.turn ? 'happy' : (lit > 0.3 ? 'surprised' : (t > B.l3 && t < B.l4 ? 'neutral' : 'neutral'));
+  guy.update(t, { pose: t > B.turn ? 'point' : (t < B.slam ? 'phone' : 'idle'), mood, headTurn: lit > 0.3 && t < B.turn ? -0.5 * lit : 0 });
+  barista.update(t, { pose: (t > B.l5 && t < B.l6) || t > B.they2 - 0.8 ? 'point' : 'hold', talk: (t > B.call - 0.3 && t < B.l6) || (t > B.they2 - 0.8 && t < B.turn) ? 1 : 0, mood: 'happy' });
+  crowd.forEach((c, i) => c.update(t + i * 1.7, { pose: 'explain', talk: t > B.slam ? 0.8 : 0.4, mood: 'neutral' }));
+  // x-ray head
+  const xr = xray(t); const h = HEAD(); brain.position.copy(h).add(v3([0, 0.06, 0])); brain.rotation.y = guy.root.rotation.y + Math.PI / 2; skullX.position.copy(h);
+  brainM.opacity = 0.6 * xr; brainE.opacity = 0.95 * xr; skullX.material.opacity = 0.05 * xr;
+  brainM.color.set(PU).lerp(new THREE.Color(AM), clamp(lit * 1.2)); brainGlow.position.copy(brain.position); brainGlow.material.opacity = 0.5 * lit * xr; brain.scale.setScalar(1 + 0.18 * lit);
+  window.__lit = lit;
+}
+
+// ---------- 2D overlays: sound packets between speakers and the head ----------
+let RING = 150; const proj = v => { const p = v.clone().project(cam); return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]; };
+function drawWaves(t) {
+  const xr = xray(t); if (xr <= 0.01 && t < B.l3) return; const hd = proj(HEAD()); RING = Math.max(110, Math.min(300, 0.34 * 1920 / (cam.position.distanceTo(HEAD()) * 2 * Math.tan(cam.fov * Math.PI / 360))));
+  for (const [t0, kind, label] of WV) { const u = (t - t0) / TRAVEL; if (u < 0 || u > 1.35) continue;
+    const srcW = kind === 'noise' ? crowd[(Math.round(t0 * 10)) % 2].head : barista.head; const sv = new THREE.Vector3(); srcW.getWorldPosition(sv); const sp = proj(sv);
+    const pass = kind === 'name'; const D = Math.hypot(hd[0] - sp[0], hd[1] - sp[1]) || 1; const gf = clamp(1 - (RING + 40) / D, 0.2, 0.95); const gate = 1 - Math.cbrt(1 - gf); const uu = pass ? Math.min(u, 1) : Math.min(u, gate);
+    const x = lerp(sp[0], hd[0], eo(uu)), y = lerp(sp[1], hd[1], eo(uu));
+    const ang = Math.atan2(hd[1] - sp[1], hd[0] - sp[0]); const fade = pass ? (u > 1 ? 0 : 1) : (u < gate ? 1 : clamp(1 - (u - gate) / 0.4));
+    const flat = pass ? 1 : (u < gate ? 1 : clamp(1 - (u - gate) / 0.25));
+    const col = pass ? AM : (kind === 'latte' ? '#9aa0d0' : '#8088c0'); const amp = (pass ? 40 : 32) * flat, len = pass ? 260 : 210; if (!pass && u >= gate) window.__hitG = t;
+    ui.save(); ui.translate(x, y); ui.rotate(ang); ui.globalAlpha = fade * Math.max(xr, 0.6); ui.strokeStyle = col; ui.lineWidth = pass ? 14 : 12; ui.lineCap = 'round'; if (pass) { ui.shadowColor = AM; ui.shadowBlur = 30; }
+    ui.beginPath(); for (let k = 0; k <= 40; k++) { const s = k / 40, xx = (s - 1) * len, env = Math.sin(s * Math.PI); const yy = Math.sin(s * 14 - t * 20) * amp * env; k ? ui.lineTo(xx, yy) : ui.moveTo(xx, yy); } ui.stroke(); ui.restore();
+    if (label && fade > 0.05) { ui.save(); ui.globalAlpha = fade; ui.font = `700 ${pass ? 64 : 54}px Poppins`; ui.textAlign = 'center'; ui.textBaseline = 'middle'; ui.fillStyle = pass ? AM : '#8a90c0'; ui.shadowColor = 'rgba(0,0,0,0.85)'; ui.shadowBlur = 20; const lx = clamp(x - Math.cos(ang) * len * 0.5, 120, 960), ly = y - Math.sin(ang) * len * 0.5 - 60; ui.fillText(label, lx, ly); if (kind === 'latte' && u >= gate) { const k = clamp((u - gate) / 0.12); ui.strokeStyle = RD; ui.lineWidth = 9; ui.shadowBlur = 0; ui.beginPath(); ui.moveTo(lx - 110, ly); ui.lineTo(lx - 110 + 220 * k, ly); ui.stroke(); } ui.restore(); }
+  }
+  // the filter gate at the ear (x-ray HUD): noise stops here
+  if (xr > 0.05 && t > B.l3 - 0.2 && t < B.l6 + 0.4) { ui.save(); ui.globalAlpha = xr * clamp((t - B.l3 + 0.2) / 0.3) * clamp((B.l6 + 0.4 - t) / 0.3); const r = RING; const hit = window.__hitG && t - window.__hitG < 0.12; ui.strokeStyle = hit ? '#d8fbff' : CY; ui.lineWidth = hit ? 9 : 6; ui.setLineDash([18, 14]); ui.lineDashOffset = -t * 40; ui.beginPath(); ui.arc(hd[0], hd[1], r, 0, 7); ui.stroke(); ui.restore(); }
+}
+
+// ---------- type ----------
+function drawType(t) {
+  { const g = ui.createLinearGradient(0, 0, 0, 820); g.addColorStop(0, 'rgba(2,3,12,0.55)'); g.addColorStop(1, 'rgba(2,3,12,0)'); ui.fillStyle = g; ui.fillRect(0, 0, W, 820); }
+  // frame 0: the whole question, already breathing; NAME kicks on every marker stroke; blown away on the slam
+  if (t < B.slam + 0.22) { const bl = seg(t, B.slam, 0.2); const kick = 0.5 + 0.5 * Math.sin(t * 9);
+    ui.save(); ui.translate(540, 480); const s0 = (1 + 0.015 * Math.sin(t * 5)) * (1 + bl * 0.1); ui.scale(s0, s0); ui.translate(-540, -480); ui.globalAlpha = 1 - bl;
+    const o = { from: 1.0 };
+    line([['WHY', -1], ['DOES', -1]], 300, 120, 5, o);
+    line([['STARBUCKS', -1]], 445, 150, 5, o);
+    ui.save(); ui.translate(540, 620); ui.scale(1 + 0.04 * kick, 1 + 0.04 * kick); ui.translate(-540, -620); line([['NEED', -1], ['YOUR', -1], ['NAME?', -1, AM]], 620, 140, 5, o); ui.restore(); ui.restore(); }
+  superAt(t, 'HINT:', B.hint - 0.05, B.about - B.hint, 300, 130, '#ffffff');
+  superAt(t, 'YOUR BRAIN', B.about - 0.05, B.l3 - B.about + 0.05, 300, 150, PU);
+  superAt(t, 'TUNES OUT', B.tunes - 0.05, B.cafe - B.tunes, 300, 150, '#ffffff');
+  superAt(t, 'CAFÉ NOISE', B.cafe - 0.05, B.l4 - B.cafe + 0.05, 300, 150, '#d6dbf5');
+  superAt(t, 'BUT IT CAN STILL CATCH', B.but - 0.05, B.own - B.but, 300, 100, '#ffffff');
+  superAt(t, 'YOUR OWN NAME', B.own - 0.05, B.l5 - B.own + 0.05, 300, 135, AM);
+  if (t > B.call - 0.1 && t < B.l6) { const o = { a: clamp((B.l6 - t) / 0.12) }; line([['THEY', B.l5 - 0.05], ['CALL', B.call - 0.05], ['YOU,', B.you5 - 0.05, AM]], 280, 130, t, o); line([['NOT', B.not5 - 0.05, RD], ['YOUR', B.not5 + 0.12], ['LATTE', B.latte - 0.05]], 430, 120, t, o); }
+  if (t > B.l6 - 0.05 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) };
+    if (t < B.they2 - 0.05) line([['YOUR', B.l6 - 0.05], ['NAME', B.l6 + 0.25, AM], ["ISN'T", B.isnt - 0.05, RD]], 300, 125, t, o), line([['JUST', B.isnt + 0.45], ['A', B.label - 0.1], ['LABEL.', B.label - 0.05]], 440, 125, t, o);
+    else line([["IT'S", B.they2 - 0.05], ['WHAT', B.they2 + 0.15], ['MAKES', B.makes - 0.05]], 290, 125, t, o), line([['YOU', B.you6 - 0.05, AM], ['TURN', B.turn - 0.05, CY], ['AROUND.', B.around - 0.05, CY]], 440, 125, t, o); }
+  const fa = (t > B.l2 && t < B.sig) ? clamp((t - B.l2) / 0.3) * clamp((B.sig - t) / 0.2) : 0;
+  note('Illustrative · Not affiliated with Starbucks', fa, 1440);
+  // YOU tag
+  if (t < B.sig + 0.2) { const v = new THREE.Vector3(); guy.body.getWorldPosition(v); v.y += 0.45; const [sx0, sy0] = proj(v); const sx = clamp(sx0, 110, 970), sy = clamp(sy0, 840, 1380); ui.save(); ui.globalAlpha = clamp((B.sig + 0.2 - t) / 0.2) * (t > B.slam + 0.1 && t < B.turn - 0.2 ? 0 : 1); ui.fillStyle = '#c9a36b'; ui.beginPath(); ui.roundRect(sx - 75, sy - 34, 150, 68, 16); ui.fill(); ui.font = '700 46px Poppins'; ui.textAlign = 'center'; ui.textBaseline = 'middle'; ui.fillStyle = '#2a1c08'; ui.fillText('YOU', sx, sy + 3); ui.restore(); }
+}
+
+// ---------- sound cue sheet (clean tonal only) ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  ev(0, 'pop2', 0.7); ev(0.45, 'card', 0.6); ev(0.9, 'card', 0.6);
+  ev(B.slam, 'slam', 1.2); ev(B.slam, 'whoosh', 1); ev(B.hint - 0.05, 'super', 0.8); ev(B.about - 0.05, 'ping', 0.8);
+  ev(B.l3 + 0.1, 'whoosh'); ev(B.tunes - 0.05, 'super', 0.7); ev(B.cafe - 0.05, 'pop', 0.6);
+  for (const [t0, k] of WV) if (k === 'name') ev(t0 + TRAVEL, 'ping', 0.9); else if (k === 'latte') ev(t0 + TRAVEL * 0.82, 'pop', 0.5);
+  ev(B.l4 + 0.1, 'whoosh'); ev(B.own - 0.05, 'slam', 0.7);
+  ev(B.l5 + 0.1, 'whoosh'); ev(B.you5 - 0.05, 'pop2', 0.8); ev(B.not5 - 0.05, 'card', 0.7);
+  ev(B.l6 + 0.05, 'whoosh', 0.8); ev(B.isnt - 0.05, 'pop', 0.8); ev(B.turn - 0.15, 'swish', 0.9); ev(B.around - 0.05, 'slam', 0.8);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.slam, B.around] }); props(t);
+  bloom.strength = 0.6 + (t > B.slam ? 0.45 * Math.exp(-(t - B.slam) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawWaves(t); drawType(t); signature(t, '', RD); note('Not affiliated with Starbucks', clamp((t - B.sig - 0.38) / 0.18), 1440); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>
