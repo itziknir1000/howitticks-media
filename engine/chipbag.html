@@ -1,0 +1,198 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// Why is your chip bag full of air? One element, many jobs: the x-ray bag (snack → gas chamber → flush chamber → cushion → shield). The gas molecules are the thread.
+import { makeToon } from './toon.js';
+import { THREE, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex } from './common.js';
+import { B, installTimeline, stage, glowSprite, camAt, line, superAt, foot, signature, sigEvents, filmLook, eventsHelper, CY, RD, AM, PU } from './hit.js';
+import { note } from './common.js';
+
+bloom.threshold = 0.82; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.55; key.castShadow = false;
+stage();
+const GOLD = '#FFC24A', STALE = '#7d6e55', BX = 0.3, BY = 0.98, BW = 0.9, BH = 1.3, SEAL = 0.09;
+
+// ---------- the guy, fixed look ----------
+const guy = makeToon({ skin: '#f2c29b', hair: '#2b1d16', shirt: '#3a6df0', pants: '#1f2547', shoes: '#c94a3a', hairStyle: 'cap' });
+guy.root.position.set(-0.68, 0, 0.35); guy.root.rotation.y = 0.45; scene.add(guy.root);
+
+// ---------- the x-ray bag: two puffed skins ----------
+const bag = new THREE.Group(); bag.position.set(BX, BY, 0); scene.add(bag);
+const LBL = canvasTex(512, 720);
+LBL.draw((x, w, h) => { x.clearRect(0, 0, w, h); const g = x.createLinearGradient(0, 0, w, h); g.addColorStop(0, '#d23a2c'); g.addColorStop(1, '#8a1f3a'); x.fillStyle = g; x.fillRect(0, 0, w, h);
+  x.fillStyle = 'rgba(255,255,255,0.18)'; for (let i = 0; i < 18; i++) { x.fillRect(0, i * 40, w, 3); }
+  x.font = '700 120px Poppins'; x.textAlign = 'center'; x.fillStyle = '#ffe9a8'; x.shadowColor = 'rgba(0,0,0,0.5)'; x.shadowBlur = 16; x.fillText('CRUNCH', w / 2, h * 0.36); x.shadowBlur = 0;
+  x.fillStyle = GOLD; x.beginPath(); x.ellipse(w / 2, h * 0.62, 150, 90, -0.3, 0, 7); x.fill(); x.fillStyle = '#e09a2a'; x.beginPath(); x.ellipse(w / 2 + 20, h * 0.64, 110, 60, -0.3, 0, 7); x.fill();
+  x.font = '500 40px Poppins'; x.fillStyle = '#ffe9a8'; x.fillText('SEA SALT', w / 2, h * 0.86);
+  x.fillStyle = 'rgba(0,0,0,0.35)'; for (let i = 0; i < 26; i++) { x.fillRect(i * 20, 0, 10, 26); x.fillRect(i * 20, h - 26, 10, 26); } });
+const SX = 30, SY = 40;
+function skin(sign) {
+  const g = new THREE.PlaneGeometry(BW, BH, SX, SY);
+  const m = new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: sign > 0 ? LBL.tex : null, metalness: 0.08, roughness: 0.55, transparent: true, opacity: 1, side: THREE.DoubleSide, depthWrite: false, emissive: '#0a1030', emissiveIntensity: 0.6 });
+  if (sign < 0) m.color.set('#1a2466');
+  const mesh = new THREE.Mesh(g, m); mesh.userData = { base: g.attributes.position.array.slice(), sign }; bag.add(mesh); return mesh; }
+const front = skin(1), back = skin(-1);
+const rimPts = []; for (let i = 0; i <= 60; i++) rimPts.push(new THREE.Vector3());
+const rimG = new THREE.BufferGeometry().setFromPoints(rimPts); const rim = new THREE.LineLoop(rimG, new THREE.LineBasicMaterial({ color: CY, transparent: true, opacity: 0.8, toneMapped: false })); bag.add(rim);
+const sealM = new THREE.MeshBasicMaterial({ color: '#9fb4ff', transparent: true, opacity: 0.5, toneMapped: false });
+const sealTop = new THREE.Mesh(new THREE.PlaneGeometry(BW, 0.02), sealM.clone()); sealTop.position.y = BH / 2 - SEAL; bag.add(sealTop);
+const sealBot = new THREE.Mesh(new THREE.PlaneGeometry(BW, 0.02), sealM); sealBot.position.y = -BH / 2 + SEAL; bag.add(sealBot);
+const shape = (x, y) => { const u = Math.abs(x) / (BW / 2), v = Math.abs(y) / (BH / 2 - SEAL); if (v >= 1) return 0; return Math.sqrt(Math.max(0, (1 - Math.pow(u, 4)) * (1 - Math.pow(v, 6)))); };
+let curPuff = 0.3;
+function setBag(puff, sq, open) { curPuff = puff;
+  for (const m of [front, back]) { const p = m.geometry.attributes.position.array, b = m.userData.base;
+    for (let i = 0; i < p.length; i += 3) { const x = b[i], y = b[i + 1]; const s = shape(x, y); const bulge = 1 + (1 - sq) * 0.9 * s;
+      p[i] = x * (1 + (bulge - 1) * 0.25); p[i + 1] = y * sq; p[i + 2] = m.userData.sign * puff * s * bulge;
+      if (open > 0 && y > BH / 2 - SEAL - 0.01) p[i + 2] += m.userData.sign * open * 0.08 * (1 - Math.pow(Math.abs(x) / (BW / 2), 2)); }
+    m.geometry.attributes.position.needsUpdate = true; m.geometry.computeVertexNormals(); }
+  const r = rimG.attributes.position.array; for (let i = 0; i <= 60; i++) { const a = i / 60 * Math.PI * 2; r[i * 3] = Math.cos(a) * BW / 2 * 1.02; r[i * 3 + 1] = Math.sin(a) * BH / 2 * sq; r[i * 3 + 2] = 0; }
+  for (let i = 0; i <= 60; i++) { const a = i / 60 * Math.PI * 2, cx = Math.cos(a), cy = Math.sin(a); const k = 1 / Math.max(Math.abs(cx), Math.abs(cy)); r[i * 3] = cx * k * BW / 2; r[i * 3 + 1] = cy * k * BH / 2 * sq; }
+  rimG.attributes.position.needsUpdate = true;
+  sealTop.position.y = (BH / 2 - SEAL) * sq; sealBot.position.y = -(BH / 2 - SEAL) * sq; }
+
+// ---------- chips ----------
+const chips = []; { let s = 9; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 13; i++) { const m = new THREE.Mesh(new THREE.SphereGeometry(0.13, 18, 10), new THREE.MeshStandardMaterial({ color: GOLD, roughness: 0.6, emissive: '#5a3200', emissiveIntensity: 0.35 }));
+    m.scale.set(1, 0.18, 0.75); m.position.set((r() - 0.5) * 0.55, -BH / 2 + SEAL + 0.06 + (i % 4) * 0.05 + r() * 0.03, (r() - 0.5) * 0.12); m.rotation.set((r() - 0.5) * 1.2, r() * 3, (r() - 0.5) * 0.9);
+    m.userData = { p: m.position.clone(), w: r() * 6 }; bag.add(m); chips.push(m); } }
+const chipGlow = glowSprite('rgba(255,194,74,1)', 1.0, 0.0); chipGlow.position.set(0, -BH / 2 + 0.22, 0.05); bag.add(chipGlow);
+
+// ---------- molecules: N2 (cyan) / O2 (red) ----------
+const NM = 30, mols = []; { let s = 21; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < NM; i++) { const g = new THREE.Group(); const mat = new THREE.MeshBasicMaterial({ color: CY, transparent: true, toneMapped: false });
+    for (const sx of [-1, 1]) { const a = new THREE.Mesh(new THREE.SphereGeometry(0.03, 12, 8), mat); a.position.x = sx * 0.028; g.add(a); }
+    g.userData = { mat, h: [(r() - 0.5) * 0.66, -0.2 + r() * 0.62, (r() - 0.5)], w: r() * 6, sp: 0.6 + r() * 0.8, ox: i % 3 === 0, k: Math.floor(i / 3) };
+    bag.add(g); mols.push(g); } }
+const nozzle = new THREE.Group(); { const m = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.7, 16), new THREE.MeshStandardMaterial({ color: '#8fa3ff', metalness: 0.7, roughness: 0.3, emissive: '#1a2a80', emissiveIntensity: 0.5 })); m.position.y = 0.35; nozzle.add(m);
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 8), new THREE.MeshBasicMaterial({ color: CY, toneMapped: false })); nozzle.add(tip); } bag.add(nozzle);
+// the falling box (load test)
+const box = new THREE.Group(); { const g = new THREE.BoxGeometry(0.9, 0.36, 0.55); box.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: '#a8742a', roughness: 0.7, emissive: '#5a3200', emissiveIntensity: 0.7 })));
+  box.add(new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color: AM, toneMapped: false }))); } scene.add(box);
+const shieldG = glowSprite('rgba(62,230,255,1)', 1.6, 0); shieldG.position.set(0, -0.3, 0.1); bag.add(shieldG);
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  why: wt(0, 'Why'), chip: wt(0, 'chip'), bag: wt(0, 'bag'), full: wt(0, 'full'), air: L[0].end - 0.3,
+  l2: L[1].start, many: wt(1, 'many'), mostly: wt(1, 'mostly'), nitrogen: wt(1, 'nitrogen'),
+  l3: L[2].start, oxygen: wt(2, 'Oxygen'), oil: wt(2, 'oil'), stale: wt(2, 'stale'),
+  l4: L[3].start, pushes: wt(3, 'pushes'), out: wt(3, 'out'), last: wt(3, 'last'), longer: wt(3, 'longer'),
+  l5: L[4].start, puffy: wt(4, 'puffy'), stops: wt(4, 'cushions'), breaking: wt(4, 'fewer'),
+  l6: L[5].start, not6: wt(5, 'not'), air6: wt(5, 'air'), buying2: wt(5, 'buying', 1), bodyguard: wt(5, 'bodyguard'),
+  slam: L[0].end + 0.06,
+}), () => { buildCam(); });
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.l6, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+let CK = [];
+function buildCam() {
+  CK = [
+    [-0.2, [0.15, 1.55, 4.3], [0.0, 1.22, 0]],
+    [B.full, [0.18, 1.48, 3.8], [0.05, 1.18, 0]],
+    [B.slam - 0.05, [0.25, 1.28, 3.3], [0.12, 1.02, 0]],
+    [B.slam + 0.45, [0.42, 0.95, 2.7], [BX, 0.9, 0], 'whip'],
+    [B.l3 - 0.1, [0.5, 0.93, 2.5], [BX, 0.9, 0]],
+    [B.l3 + 0.5, [0.3, 0.88, 2.35], [BX, 0.88, 0], 'whip'],
+    [B.l4 - 0.1, [0.28, 0.9, 2.3], [BX, 0.9, 0]],
+    [B.l4 + 0.5, [0.38, 1.25, 2.35], [BX, 1.2, 0], 'whip'],
+    [B.l5 - 0.1, [0.34, 1.22, 2.2], [BX, 1.16, 0]],
+    [B.l5 + 0.45, [0.5, 1.3, 3.1], [BX, 1.22, 0], 'whip'],
+    [B.breaking, [0.45, 1.28, 3.0], [BX, 1.2, 0]],
+    [B.l6 + 0.1, [0.25, 1.15, 2.7], [0.15, 1.0, 0], 'whip'],
+    [B.sig - 0.05, [0.28, 1.05, 2.3], [BX, 0.95, 0]],
+    [B.sig + 0.5, [0.3, 1.0, 1.4], [BX, 0.98, 0], 'whip'],
+    [B.end + 1, [0.3, 1.0, 1.3], [BX, 0.98, 0]],
+  ]; }
+
+// ---------- state ----------
+const xrayAt = t => clamp(seg(t, B.l2 - 0.15, 0.4));
+const staleAt = t => eio(seg(t, B.oil - 0.1, B.stale - B.oil + 0.3)) * (1 - eio(seg(t, B.l4 - 0.15, 0.25)));
+const o2In = t => eio(seg(t, B.oxygen - 0.1, 0.45));
+const openAt = t => eio(seg(t, B.l4 - 0.2, 0.3)) * (1 - eio(seg(t, B.longer, 0.3)));
+const dropT = () => B.stops - 0.12;
+function boxState(t) { // y of box bottom above bag top, squash of bag
+  const d = dropT(); if (t < d - 0.5 || t > B.l6 + 0.4) return { vis: false, sq: 1 };
+  const top = BY + BH / 2; let y, sq = 1;
+  if (t < d) { const u = seg(t, d - 0.5, 0.5); y = top + lerp(2.2, 0, u * u); }
+  else { const k = t - d; sq = 0.88 - 0.18 * Math.exp(-k * 2.5) * Math.cos(k * 11); y = BY + BH / 2 * sq; if (t > B.l6 - 0.1) y += eio(seg(t, B.l6 - 0.1, 0.5)) * 2.5; }
+  return { vis: true, y, sq: t > B.l6 - 0.1 ? lerp(sq, 1, seg(t, B.l6 - 0.1, 0.3)) : sq }; }
+const shieldAt = t => eio(seg(t, B.air6 - 0.05, 0.5)) * (1 - seg(t, B.sig, 0.3));
+
+function props(t) {
+  // hook: the bag pops up already moving, then breathes
+  const pop = t < 0.6 ? 0.08 + 0.3 * eo(seg(t, 0.0, 0.3)) - 0.04 * Math.sin(seg(t, 0.3, 0.3) * Math.PI) : 0.34;
+  const gs = t < 0.6 ? 0.6 + 0.4 * eo(seg(t, 0, 0.3)) + 0.1 * Math.sin(seg(t, 0.3, 0.3) * Math.PI) : 1; bag.scale.setScalar(gs);
+  const bs = boxState(t); setBag(pop + 0.01 * Math.sin(t * 3), bs.sq, openAt(t));
+  bag.rotation.y = -0.35 + 0.12 * Math.sin(t * 0.7) + (t < B.slam ? 0.25 * (1 - eo(seg(t, 0, B.slam))) : 0);
+  bag.rotation.z = t < 0.5 ? 0.12 * Math.sin(t * 22) * (1 - t / 0.5) : 0;
+  const xr = xrayAt(t); front.material.opacity = lerp(1, 0.16, xr); front.material.map = xr > 0.98 ? null : LBL.tex; front.material.color.set(xr > 0.98 ? '#2a3a9a' : '#ffffff'); front.material.needsUpdate = true;
+  back.material.opacity = lerp(1, 0.22, xr); rim.material.opacity = 0.25 + 0.65 * xr;
+  sealTop.material.color.set(openAt(t) > 0.1 ? AM : '#9fb4ff'); sealTop.material.opacity = 0.5 + 0.4 * openAt(t);
+  // chips
+  const st = staleAt(t); chips.forEach(c => { c.material.color.set(new THREE.Color(GOLD).lerp(new THREE.Color(STALE), st)); c.material.emissiveIntensity = 0.35 * (1 - st);
+    const jig = t < 0.6 ? Math.sin(t * 30 + c.userData.w) * 0.02 * (1 - t / 0.6) : 0; c.position.copy(c.userData.p); c.position.y += jig + (bs.sq - 1) * 0.12; });
+  chipGlow.material.opacity = 0.35 * xr * (1 - st);
+  // molecules
+  const op = openAt(t), topY = BH / 2 - SEAL;
+  mols.forEach((g, i) => { const d = g.userData; const zr = 0.6 * curPuff;
+    let x = d.h[0] + Math.sin(t * d.sp + d.w) * 0.06, y = d.h[1] + Math.cos(t * d.sp * 0.8 + d.w) * 0.05, z = d.h[2] * zr;
+    y = y * bs.sq; g.rotation.set(t * d.sp, t * d.sp * 0.7 + d.w, 0);
+    let col = CY, a = xr, sc = 1;
+    if (d.ox) { // red O2 drifts in, then is flushed out through the open top; a fresh N2 comes in from the nozzle
+      const inA = o2In(t), e0 = B.pushes - 0.15 + d.k * 0.06, ex = eio(seg(t, e0, 0.7)), en = eio(seg(t, B.out + d.k * 0.06, 0.6));
+      if (t < e0 + 0.7) { col = inA > 0.5 ? RD : CY; sc = 1 + 0.25 * inA; if (ex > 0) { x = lerp(x, x * 0.3, ex); y = lerp(y, topY + 0.55 + d.k * 0.04, ex); a *= 1 - seg(ex, 0.7, 0.3); } }
+      else { col = CY; x = lerp(0, x, en); y = lerp(topY + 0.1, y, en); z = z * en; a *= clamp(en * 4); } }
+    // shield: everyone forms a ring around the chips
+    const sh = shieldAt(t); if (sh > 0) { const an = i / NM * Math.PI * 2 + t * 0.8; x = lerp(x, Math.cos(an) * 0.34, sh); y = lerp(y, -0.2 + Math.sin(an) * 0.2, sh); z = lerp(z, 0.02, sh); }
+    g.position.set(x, y, z); g.scale.setScalar(sc); d.mat.color.set(col); d.mat.opacity = a; g.visible = a > 0.01; });
+  shieldG.material.opacity = 0.18 * shieldAt(t);
+  // nozzle
+  const nz = eio(seg(t, B.l4 - 0.25, 0.35)) * (1 - eio(seg(t, B.longer, 0.35))); nozzle.visible = nz > 0.01; nozzle.position.set(0, topY + 0.05 + (1 - nz) * 1.2, 0);
+  // box
+  box.visible = bs.vis; if (bs.vis) box.position.set(BX, bs.y + 0.18, 0);
+  // the guy
+  const mood = t < B.slam ? 'surprised' : t > B.l6 ? 'happy' : t > B.l3 && t < B.l4 ? 'worried' : 'neutral';
+  const pose = t < B.slam ? 'surprised' : t > B.not6 ? 'point' : t > B.l2 && t < B.l3 ? 'explain' : 'idle';
+  guy.update(t, { pose, mood, headTurn: 0.25 });
+}
+
+// ---------- type ----------
+function drawType(t) {
+  { const g = ui.createLinearGradient(0, 0, 0, 780); g.addColorStop(0, 'rgba(2,3,12,0.5)'); g.addColorStop(1, 'rgba(2,3,12,0)'); ui.fillStyle = g; ui.fillRect(0, 0, W, 780); }
+  // frame 0: the whole question is on screen and breathing; it is blown away on the slam
+  if (t < B.slam + 0.22) { const bl = seg(t, B.slam, 0.2); ui.save(); ui.translate(540, 470); const s0 = (1 + 0.02 * Math.sin(t * 5)) * (1 + bl * 0.5); ui.scale(s0, s0); ui.translate(-540, -470); ui.globalAlpha = 1 - bl;
+    const o = { from: 1.0 }, kick = Math.exp(-Math.max(0, t - B.air) * 8) * (t > B.air ? 1 : 0);
+    line([['WHY', -1], ['IS', -1], ['YOUR', -1]], 300, 110, 5, o);
+    line([['CHIP', -1, AM], ['BAG', -1, AM]], 455, 180, 5, o);
+    ui.save(); ui.translate(540, 615); ui.scale(1 + 0.1 * kick, 1 + 0.1 * kick); ui.translate(-540, -615); line([['FULL', -1], ['OF', -1], ['AIR?', -1, CY]], 615, 140, 5, o); ui.restore(); ui.restore(); }
+  superAt(t, 'NOT JUST AIR', B.l2 - 0.05, B.nitrogen - B.l2 - 0.05, 300, 130, RD);
+  superAt(t, 'NITROGEN', B.nitrogen - 0.05, B.l3 - B.nitrogen, 300, 170, CY);
+  superAt(t, 'MOSTLY NITROGEN', B.nitrogen + 0.35, B.l3 - B.nitrogen - 0.35, 440, 70, '#ffffff');
+  superAt(t, 'OXYGEN', B.oxygen - 0.05, B.stale - B.oxygen, 300, 170, RD);
+  superAt(t, 'STALE', B.stale - 0.05, B.l4 - B.stale + 0.05, 300, 200, '#e8d3a6');
+  superAt(t, 'NO NITROGEN FLUSH', B.oxygen + 0.3, B.l4 - B.oxygen - 0.25, 420, 64, '#ffffff');
+  superAt(t, 'OXYGEN OUT', B.pushes - 0.05, B.last - B.pushes, 300, 170, CY);
+  superAt(t, 'LASTS LONGER', B.last - 0.05, B.l5 - B.last + 0.05, 300, 130, AM);
+  superAt(t, 'CUSHION', B.puffy - 0.05, B.breaking - B.puffy, 300, 170, CY);
+  superAt(t, 'LESS BREAKING', B.breaking - 0.05, B.l6 - B.breaking + 0.05, 300, 140, AM);
+  if (t > B.not6 - 0.05 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) }; line([['NOT', B.not6 - 0.05], ['AIR.', B.air6 - 0.05, RD]], 300, 150, t, o); line([['A', B.buying2 - 0.05], ['BODYGUARD.', B.bodyguard - 0.05, CY]], 470, 140, t, o); }
+  const fa = (t > B.l2 + 0.3 && t < B.sig) ? clamp((t - B.l2 - 0.3) / 0.3) * (1 - seg(t, B.sig - 0.2, 0.2)) : 0; foot('Simplified model · illustrative, not to scale · fictional brand', fa * 1.1, 1450);
+}
+
+// ---------- sound cue sheet (clean tonal only) ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  ev(0.05, 'pop', 1.0); ev(B.chip, 'tick', 0.8); ev(B.bag, 'tick', 0.8); ev(B.air, 'pop2', 1.0); ev(B.slam, 'slam', 1.2); ev(B.slam, 'whoosh', 1);
+  ev(B.l2 - 0.05, 'pop2', 0.8); ev(B.nitrogen - 0.05, 'super', 0.9); ev(B.nitrogen + 0.35, 'ping', 0.6);
+  ev(B.l3 + 0.1, 'whoosh'); ev(B.oxygen - 0.05, 'pop', 0.9); ev(B.stale - 0.05, 'slam', 0.6);
+  ev(B.l4 + 0.1, 'whoosh'); ev(B.pushes - 0.05, 'swish', 1); ev(B.out, 'click', 0.8); ev(B.last - 0.05, 'ping', 0.8); ev(B.longer + 0.1, 'click', 0.7);
+  ev(B.l5 + 0.1, 'whoosh'); ev(B.puffy - 0.05, 'super', 0.8); ev(dropT(), 'slam', 1.0); ev(B.breaking - 0.05, 'card', 0.8);
+  ev(B.l6 + 0.1, 'whoosh', 0.9); ev(B.not6 - 0.05, 'pop2'); ev(B.air6 - 0.05, 'pop2', 0.8); ev(B.bodyguard - 0.05, 'slam', 0.7); ev(B.bodyguard, 'ping', 0.6);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.slam, dropT()] }); props(t);
+  bloom.strength = 0.6 + (t > B.slam ? 0.45 * Math.exp(-(t - B.slam) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawType(t); signature(t, '', RD); note('Illustrative model · fictional brand', clamp((t - B.sig - 0.38) / 0.18), 1440); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>
