@@ -1,0 +1,181 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// Why does the president's party almost always lose midterms? One thread: the amber seats of "the president's party".
+// They flip in the chamber, become the downward bars of 22 midterms, the 2026 bar, the ballot, the balance, and the chamber again.
+// Neutral palette on purpose: amber = whoever holds the presidency, lavender = the other side. No party colours, names or logos.
+import { makeToon, toon } from './toon.js';
+import { THREE, RoundedBoxGeometry, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex, txt } from './common.js';
+import { B, v3, easeB, installTimeline, stage, glowSprite, camAt, line, superAt, foot, signature, sigEvents, filmLook, eventsHelper, CY, PU, RD, AM } from './hit.js';
+const note = (str, a, y = 1440) => { if (a <= 0) return; ui.save(); ui.globalAlpha = a; ui.font = '500 32px Poppins'; const w = ui.measureText(str).width + 48; ui.fillStyle = 'rgba(3,5,18,0.72)'; ui.beginPath(); ui.roundRect(540 - w / 2, y - 29, w, 56, 28); ui.fill(); ui.fillStyle = '#c8ceff'; ui.textAlign = 'center'; ui.textBaseline = 'middle'; ui.fillText(str, 540, y); ui.restore(); };
+
+bloom.threshold = 0.8; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.7; key.castShadow = false;
+stage();
+const LAV = '#9fb4ff';
+const amberM = new THREE.MeshBasicMaterial({ color: new THREE.Color(AM).multiplyScalar(1.3), toneMapped: false });
+const lavM = new THREE.MeshStandardMaterial({ color: '#5d6bc4', emissive: '#2a3480', emissiveIntensity: 0.6, roughness: 0.4 });
+const cyanM = new THREE.MeshBasicMaterial({ color: new THREE.Color(CY).multiplyScalar(1.1), toneMapped: false });
+const edge = (g, col = CY, op = 0.7) => new THREE.LineSegments(new THREE.EdgesGeometry(g, 20), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: op, toneMapped: false }));
+
+// ---------- the chamber: a hemicycle of seats ----------
+const chamber = new THREE.Group(); scene.add(chamber);
+const SEATS = []; const sg = new THREE.SphereGeometry(0.038, 14, 10);
+[14, 18, 22, 26, 30].forEach((n, r) => { const R = 0.5 + r * 0.115; for (let i = 0; i < n; i++) { const a = Math.PI - (i + 0.5) / n * Math.PI; // left (a>π/2) = amber
+  const m = new THREE.Mesh(sg, a > Math.PI / 2 ? amberM : lavM); m.position.set(Math.cos(a) * R, 0.05 + r * 0.05, -Math.sin(a) * R * 0.85); chamber.add(m); SEATS.push({ m, a, r, amber: a > Math.PI / 2 }); } });
+// flip order: amber seats nearest the middle first
+const FLIP = SEATS.filter(s => s.amber).sort((p, q) => (p.a - q.a) || (q.r - p.r));
+const dais = new THREE.Mesh(new RoundedBoxGeometry(0.4, 0.08, 0.2, 3, 0.03), toon('#1c2360')); dais.position.set(0, 0.04, 0.2); chamber.add(dais);
+const chGlow = glowSprite('rgba(255,181,71,1)', 2.2, 0.18); chGlow.position.set(-0.7, 0.4, -0.6); chamber.add(chGlow);
+const tag = (s, col, w = 0.9, fs = 92) => { const t = canvasTex(1024, 180); t.draw((c, w2, h2) => { c.clearRect(0, 0, w2, h2); txt(c, s, w2 / 2, h2 / 2 + 6, fs, col, { dir: 'ltr', font: 'Poppins' }); }); const m = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 180 / 1024), new THREE.MeshBasicMaterial({ map: t.tex, transparent: true, toneMapped: false, depthWrite: false })); return m; };
+const tagA = tag("PRESIDENT'S PARTY", AM, 0.95); tagA.position.set(-0.5, 0.02, 0.42); tagA.rotation.x = -0.5; chamber.add(tagA);
+const tagB = tag('OTHER SIDE', LAV, 0.7); tagB.position.set(0.52, 0.02, 0.42); tagB.rotation.x = -0.5; chamber.add(tagB);
+
+// ---------- the chart: 22 midterms 1938–2022 + 2026 ----------
+const CX = 6.5, BY = 1.8; const chart = new THREE.Group(); chart.position.set(CX, 0, 0); scene.add(chart);
+const YEARS = []; for (let y = 1938; y <= 2022; y += 4) YEARS.push(y); YEARS.push(2026); // 23
+const UP = new Set([1998, 2002]); const STEP = 0.13, X0 = -(YEARS.length - 1) * STEP / 2;
+const base = new THREE.Mesh(new THREE.BoxGeometry(YEARS.length * STEP + 0.2, 0.015, 0.04), new THREE.MeshBasicMaterial({ color: '#c8ceff', toneMapped: false })); base.position.set(0, BY, 0.06); chart.add(base);
+let sd = 9; const rnd = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+const BARS = YEARS.map((y, i) => { const up = UP.has(y), h = up ? 0.3 : 0.45 + rnd() * 0.75; const m = new THREE.Mesh(new RoundedBoxGeometry(0.085, 1, 0.085, 2, 0.02), up ? cyanM : y === 2026 ? new THREE.MeshBasicMaterial({ color: new THREE.Color(AM).multiplyScalar(1.35), toneMapped: false }) : amberM); m.position.x = X0 + i * STEP; chart.add(m); return { m, y, up, h, i }; });
+const YL = []; const yl = (s, i, col) => { const m = tag(s, col, 0.9, 150); m.position.set(X0 + i * STEP, BY + (s === '1998' ? 0.62 : s === '2002' ? 0.5 : s === '2026' ? 0.26 : 0.12), 0.1); chart.add(m); YL.push(m); return m; };
+yl('1938', 0, '#aab3e8'); yl('1998', 15, CY); yl('2002', 16, CY); const y26 = yl('2026', 22, AM);
+const ylab = tag('BAR SIZES ILLUSTRATIVE', '#aab3e8', 1.6, 80); ylab.position.set(0, BY - 1.75, 0.1); chart.add(ylab);
+const q26 = tag('?', AM, 1.4, 170); q26.position.set(X0 + 22 * STEP, BY - 0.35, 0.12); chart.add(q26);
+
+// ---------- the ballot box (vote on the president) ----------
+const BXX = -6.0; const bbox = new THREE.Group(); bbox.position.set(BXX, 0, 0); scene.add(bbox);
+{ const g = new RoundedBoxGeometry(0.7, 0.62, 0.5, 3, 0.04); const m = new THREE.Mesh(g, new THREE.MeshPhysicalMaterial({ color: '#1b2a7a', transparent: true, opacity: 0.25, roughness: 0.2, emissive: '#0a1240', emissiveIntensity: 0.8, depthWrite: false })); m.position.y = 0.31; bbox.add(m); const e = edge(g, CY, 0.8); e.position.y = 0.31; bbox.add(e);
+  const slot = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.012, 0.05), new THREE.MeshBasicMaterial({ color: '#02030a' })); slot.position.set(0, 0.625, 0); bbox.add(slot); }
+const ballotT = canvasTex(512, 360); ballotT.draw((c, w, h) => { c.fillStyle = '#eef1ff'; c.beginPath(); c.roundRect(0, 0, w, h, 24); c.fill(); txt(c, 'MIDTERM BALLOT', w / 2, 52, 44, '#3a4170', { dir: 'ltr', font: 'Poppins' });
+  c.strokeStyle = '#3a4170'; c.lineWidth = 8; c.strokeRect(46, 120, 70, 70); txt(c, 'House', 150, 157, 54, '#1a1f48', { dir: 'ltr', font: 'Poppins', align: 'left' });
+  c.strokeRect(46, 230, 70, 70); txt(c, 'Senate', 150, 267, 54, '#1a1f48', { dir: 'ltr', font: 'Poppins', align: 'left' }); });
+const ballot = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.295), new THREE.MeshBasicMaterial({ map: ballotT.tex, transparent: true, toneMapped: false, side: THREE.DoubleSide, color: new THREE.Color(0.62, 0.64, 0.75) })); scene.add(ballot);
+const verdictT = canvasTex(1024, 200); verdictT.draw((c, w, h) => txt(c, 'HOW IS THE PRESIDENT DOING?', w / 2, h / 2 + 6, 70, AM, { dir: 'ltr', font: 'Poppins' }));
+const verdict = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.254), new THREE.MeshBasicMaterial({ map: verdictT.tex, transparent: true, toneMapped: false, depthWrite: false })); verdict.visible = false;
+
+// ---------- the balance + the crowd (other theories, illustrative) ----------
+const BLX = -10.0, BLZ = 0; const bal = new THREE.Group(); bal.position.set(BLX, 0, BLZ); bal.scale.setScalar(0.8); scene.add(bal);
+{ const post = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.5, 4), toon('#2a3170')); post.position.y = 0.25; bal.add(post); }
+const beam = new THREE.Group(); beam.position.y = 0.52; bal.add(beam);
+beam.add(new THREE.Mesh(new RoundedBoxGeometry(1.5, 0.04, 0.16, 2, 0.015), toon('#c8ceff')));
+const panA = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.2, 0.28, 2, 0.03), amberM); panA.position.set(-0.6, 0.12, 0); beam.add(panA);
+const panB = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.2, 0.28, 2, 0.03), lavM); panB.position.set(0.6, 0.12, 0); beam.add(panB);
+const crowd = []; for (let i = 0; i < 14; i++) { const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.09, 4, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(AM).multiplyScalar(1.1), transparent: true, toneMapped: false })); m.position.set(BLX - 0.75 + (i % 7) * 0.25, 0.08, BLZ + 0.55 + Math.floor(i / 7) * 0.18); scene.add(m); crowd.push(m); }
+crowd.forEach((m, i) => m.position.set(BLX - 0.6 + (i % 7) * 0.2, 0.08, 0.6 + Math.floor(i / 7) * 0.18));
+
+// ---------- YOU ----------
+const guy = makeToon('guy'); guy.root.scale.setScalar(0.62); guy.root.position.set(BXX - 0.5, 0, 0.2); guy.root.rotation.y = 0.8; scene.add(guy.root);
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  president: wt(0, "president's"), party: wt(0, 'party'), almost: wt(0, 'almost'), lose: wt(0, 'lose'), midterms: wt(0, 'midterms'),
+  l2: L[1].start, since: wt(1, 'Since'), thirty: wt(1, 'thirty'), lost: wt(1, 'lost'), house: wt(1, 'House'), twenty: wt(1, 'twenty', 0), of: wt(1, 'of'), tt: wt(1, 'twenty-two'),
+  l3: L[2].start, tsix: wt(2, 'twenty-six'), same: wt(2, 'Same'), pattern: wt(2, 'pattern'),
+  l4: L[3].start, leading: wt(3, 'One'), theory: wt(3, 'theory'), vote: wt(3, 'vote'), pres4: wt(3, 'president'),
+  l5: L[4].start, balance: wt(4, 'balance'), power5: wt(4, 'power'), or2: wt(4, 'Or', 1), turnout: wt(4, 'turnout'), drops: wt(4, 'drops'),
+  l6: L[5].start, not6: wt(5, 'Less'), who: wt(5, "who's"), more: wt(5, 'More'), being: wt(5, 'being'), power6: wt(5, 'power', 1),
+  slam: L[0].end + 0.06,
+}), buildCam);
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.l6, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+let CK = [];
+function buildCam() { const bx = i => CX + X0 + i * STEP;
+  CK = [
+    [-0.2, [0, 2.2, 4.0], [0, 0.55, -0.3]],
+    [B.lose, [0.05, 2.1, 3.75], [0, 0.52, -0.3]],
+    [B.slam - 0.05, [0.1, 2.0, 3.55], [0, 0.5, -0.3]],
+    [B.slam + 0.45, [CX - 0.45, 1.5, 6.7], [CX - 0.35, 1.3, 0], 'whip'],
+    [B.tt - 0.3, [CX + 0.1, 1.5, 6.9], [CX + 0.05, 1.3, 0]],
+    [B.l3 - 0.1, [CX + 0.3, 1.5, 6.6], [CX + 0.3, 1.3, 0]],
+    [B.l3 + 0.4, [bx(20.5), 1.6, 3.7], [bx(20.5), 1.35, 0], 'whip'],
+    [B.l4 - 0.1, [bx(20.8), 1.55, 3.5], [bx(20.8), 1.33, 0]],
+    [B.l4 + 0.45, [BXX - 0.25, 1.3, 2.8], [BXX - 0.3, 0.75, 0], 'whip'],
+    [B.l5 - 0.1, [BXX - 0.27, 1.25, 2.65], [BXX - 0.3, 0.72, 0]],
+    [B.l5 + 0.45, [BLX, 1.4, 3.7], [BLX, 0.6, 0], 'whip'],
+    [B.turnout - 0.1, [BLX + 0.05, 1.35, 3.6], [BLX, 0.55, 0.1]],
+    [B.turnout + 0.4, [BLX + 0.05, 1.05, 3.4], [BLX, 0.4, 0.4], 'whip'],
+    [B.l6 - 0.1, [BLX + 0.07, 1.02, 3.3], [BLX, 0.38, 0.4]],
+    [B.l6 + 0.45, [0, 2.45, 4.1], [0, 0.85, -0.3], 'whip'],
+    [B.sig - 0.05, [0, 2.5, 4.2], [0, 0.85, -0.3]],
+    [B.sig + 0.5, [0, 3.6, 2.6], [0, 0.3, -0.4], 'whip'],
+    [B.end + 1, [0, 3.7, 2.5], [0, 0.3, -0.4]],
+  ]; }
+
+// ---------- per frame ----------
+function flipsAt(t) { // seats flipped in the chamber: a first wave in second 1, more on "lose", undone and redone at the end
+  let n = Math.floor(10 * eo(seg(t, 0.15, 0.8))) + Math.floor(12 * eo(seg(t, B.lose - 0.05, 0.6)));
+  if (t > B.l6 - 0.2) n = Math.floor(22 * (1 - eio(seg(t, B.l6 - 0.2, 0.5)))) + Math.floor(22 * eo(seg(t, B.being - 0.1, 0.6)));
+  return n; }
+let lastN = -1; const popAge = new Map();
+function props(t) {
+  const n = flipsAt(t);
+  FLIP.forEach((s, i) => { const f = i < n; s.m.material = f ? lavM : amberM; const at = f ? (i < 10 ? 0.15 + i * 0.08 : i < 22 ? B.lose - 0.05 + (i - 10) * 0.05 : B.being - 0.1 + (i - 22) * 0.03) : 0; const age = t - at; s.m.scale.setScalar(f && age > 0 && age < 0.25 ? 1 + 0.6 * Math.sin(age / 0.25 * Math.PI) : 1); });
+  chGlow.material.opacity = 0.16 + 0.06 * Math.sin(t * 3);
+  // bars: 22 midterms drop one by one across line 2; 2026 drops on "Same"
+  BARS.forEach(b => { const at = b.i < 22 ? B.since + b.i * ((B.tt - B.since) / 22) : B.same - 0.05; const k = b.i < 22 ? eo(seg(t, at, 0.25)) : easeB(seg(t, at, 0.35)); const h = Math.max(0.001, b.h * k);
+    b.m.scale.y = h; b.m.position.y = b.up ? BY + h / 2 : BY - h / 2; });
+  q26.visible = t > B.l3 - 0.1 && t < B.same - 0.05; const z3 = t > B.l3 + 0.1 && t < B.l4; YL.forEach(m => m.visible = !z3 || m === y26); ylab.visible = !z3; base.visible = !z3 || true; base.material.opacity = 1; q26.scale.setScalar(1 + 0.15 * Math.sin(t * 10));
+  // ballot: YOU drops it on "vote"; the verdict line lights over the box
+  const drop = seg(t, B.vote - 0.35, 0.55); const bp = drop < 0.5 ? v3([BXX - 0.12, 0.62, 0.45]).lerp(v3([BXX, 1.0, 0.1]), eio(drop * 2)) : v3([BXX, 1.0, 0.1]).lerp(v3([BXX, 0.55, 0]), eio((drop - 0.5) * 2));
+  ballot.position.copy(bp); ballot.rotation.set(-0.15, 0.5 * (1 - drop), 0); ballot.visible = t > B.l4 - 0.3 && t < B.l5 + 0.3;
+  
+  // balance tilts amber-up as voters "check" power; crowd thins on "turnout"
+  const tilt = -0.32 + 0.5 * eio(seg(t, B.l5 + 0.3, 0.7)); beam.rotation.z = tilt;
+  crowd.forEach((m, i) => { const gone = (i % 3 !== 0) && t > B.turnout + (i % 5) * 0.06; m.material.opacity = gone ? Math.max(0.12, 1 - (t - B.turnout - (i % 5) * 0.06) / 0.2) : 1; m.position.y = 0.08 + (gone ? 0 : 0.01 * Math.sin(t * 6 + i)); });
+  // YOU at the ballot box
+  const mood = t > B.l4 && t < B.l5 ? 'neutral' : 'surprised';
+  guy.update(t, { pose: t > B.vote - 0.4 && t < B.vote + 0.2 ? 'point' : 'idle', mood: t > B.l4 ? 'neutral' : mood });
+}
+
+// ---------- type ----------
+function drawType(t) {
+  { const g = ui.createLinearGradient(0, 0, 0, 820); g.addColorStop(0, 'rgba(2,3,12,0.5)'); g.addColorStop(1, 'rgba(2,3,12,0)'); ui.fillStyle = g; ui.fillRect(0, 0, W, 820); }
+  // frame 0: the whole question is on screen and alive; LOSE kicks when the seats flip
+  if (t < B.slam + 0.22) { const bl = seg(t, B.slam, 0.2); const kick = Math.max(t > 0.15 && t < 1 ? Math.exp(-((t - 0.15) % 0.08) * 20) * 0.4 : 0, t > B.lose - 0.05 ? Math.exp(-(t - B.lose + 0.05) * 7) : 0);
+    ui.save(); ui.translate(540, 500); const s0 = (1 + 0.012 * Math.sin(t * 5)) * (1 + bl * 0.5); ui.scale(s0, s0); ui.translate(-540, -500); ui.globalAlpha = 1 - bl; const o = { from: 1 };
+    line([['WHY', -1], ['DOES', -1], ['THE', -1]], 300, 110, 5, o);
+    line([["PRESIDENT'S", -1, AM], ['PARTY', -1, AM]], 440, 135, 5, o);
+    line([['ALMOST', -1], ['ALWAYS', -1]], 575, 120, 5, o);
+    ui.save(); ui.translate(540, 710); ui.scale(1 + 0.1 * kick, 1 + 0.1 * kick); ui.translate(-540, -710); line([['LOSE', -1, RD], ['MIDTERMS?', -1]], 710, 150, 5, o); ui.restore(); ui.restore(); }
+  superAt(t, 'SINCE 1938', B.since - 0.05, B.lost - B.since, 300, 150, CY);
+  superAt(t, 'LOST HOUSE SEATS', B.lost - 0.05, B.twenty - B.lost, 300, 120, AM);
+  if (t > B.twenty - 0.05 && t < B.l3 + 0.05) { const a = clamp((B.l3 + 0.05 - t) / 0.12); line([['20', B.twenty - 0.05, AM], ['OF', B.of - 0.05], ['22', B.tt - 0.05]], 330, 230, t, { a }); line([['MIDTERMS', B.tt]], 490, 100, t, { a }); }
+  superAt(t, '2026?', B.l3 - 0.05, B.same - B.l3, 300, 220, AM);
+  if (t > B.same - 0.05 && t < B.l4 + 0.05) line([['SAME', B.same - 0.05], ['PATTERN', B.pattern - 0.05, AM]], 300, 160, t, { a: clamp((B.l4 + 0.05 - t) / 0.12) });
+  superAt(t, 'ONE BIG THEORY', B.leading - 0.05, B.vote - B.leading, 300, 130);
+  if (t > B.vote - 0.05 && t < B.l5 + 0.05) { const a = clamp((B.l5 + 0.05 - t) / 0.12); line([['A', B.vote - 0.05], ['VOTE', B.vote - 0.05, AM], ['ON', B.vote + 0.15]], 300, 150, t, { a }); line([['THE', B.pres4 - 0.3], ['PRESIDENT', B.pres4 - 0.05, AM]], 450, 140, t, { a }); }
+  superAt(t, 'VOTERS BALANCE POWER', B.balance - 0.1, B.or2 - B.balance + 0.1, 300, 115, LAV);
+  superAt(t, 'TURNOUT DROPS', B.turnout - 0.05, B.l6 - B.turnout + 0.05, 300, 150, AM);
+  if (t > B.l6 - 0.05 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) }; line([['LESS', B.l6 - 0.05], ['ABOUT', B.l6 + 0.2], ["WHO'S", B.who - 0.05]], 300, 115, t, o); line([['IN', B.who + 0.3], ['POWER.', B.who + 0.5]], 425, 115, t, o);
+    line([['MORE', B.more - 0.05], ['ABOUT', B.more + 0.2]], 585, 130, t, o); line([['BEING', B.being - 0.05, AM], ['IN', B.power6 - 0.25], ['POWER.', B.power6 - 0.05, AM]], 730, 140, t, o); }
+  // footnotes
+  let fn = '', fa = 0;
+  if (t > B.l2 && t < B.l3) { fn = 'Source: UCSB American Presidency Project · Brookings (2025)'; fa = clamp((t - B.l2) / 0.3); }
+  else if (t > B.l3 && t < B.l4) { fn = 'Control of House and Senate called by AP, as of 4 Nov 2026'; fa = 1; }
+  else if (t > B.l4 && t < B.l6) { fn = 'Leading theories, debated by political scientists · illustrative'; fa = 1; }
+  else if (t > B.l6 && t < B.sig) { fn = 'US House, midterms 1938–2022 (UCSB)'; fa = 1; }
+  note(fn, fa);
+}
+
+// ---------- sound (clean tonal only) ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  for (let i = 0; i < 10; i++) ev(0.15 + i * 0.08, 'tick', 0.6); for (let i = 0; i < 12; i++) ev(B.lose - 0.05 + i * 0.05, 'pop2', 0.4); ev(B.lose - 0.05, 'pop', 1);
+  ev(B.slam, 'slam', 1.2); ev(B.slam, 'whoosh', 1); ev(B.since - 0.05, 'super', 0.8);
+  for (let i = 0; i < 22; i++) ev(B.since + i * ((B.tt - B.since) / 22), UP.has(YEARS[i]) ? 'ping' : 'tick', UP.has(YEARS[i]) ? 0.7 : 0.45);
+  ev(B.twenty - 0.05, 'slam', 0.8); ev(B.tt - 0.05, 'pop', 0.9);
+  ev(B.l3 + 0.1, 'whoosh'); ev(B.l3 - 0.05, 'super'); ev(B.same - 0.05, 'slam', 1.0);
+  ev(B.l4 + 0.1, 'whoosh'); ev(B.leading - 0.05, 'super', 0.8); ev(B.vote + 0.1, 'card', 1); ev(B.pres4 - 0.05, 'pop', 0.9);
+  ev(B.l5 + 0.1, 'whoosh'); ev(B.balance - 0.1, 'swish', 0.8); ev(B.balance + 0.45, 'pop2', 0.7); ev(B.turnout - 0.05, 'super', 0.8); for (let i = 0; i < 5; i++) ev(B.turnout + i * 0.06, 'tick', 0.4);
+  ev(B.l6 + 0.1, 'whoosh', 1); ev(B.being - 0.05, 'slam', 0.8); for (let i = 0; i < 8; i++) ev(B.being - 0.1 + i * 0.08, 'pop2', 0.35);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.slam, B.same] }); props(t);
+  bloom.strength = 0.6 + (t > B.slam ? 0.45 * Math.exp(-(t - B.slam) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawType(t); signature(t, '', RD); note('Data: UCSB · theories illustrative', clamp((t - B.sig - 0.38) / 0.18)); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>
