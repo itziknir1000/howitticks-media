@@ -1,0 +1,6 @@
+How does Face ID see you in the dark?
+It sprays over thirty thousand invisible dots on your face.
+An infrared camera maps them in three-D.
+Invisible light also floods your whole face.
+That map gets checked against your saved face.
+It doesn't need the lights on. It brings its own.

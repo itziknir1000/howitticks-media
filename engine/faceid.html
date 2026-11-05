@@ -1,0 +1,217 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// How does Face ID see you in the dark? One visual thread: the red infrared dot pattern
+// (sprayed on YOU's face → read in 3D → wire map → matched with the saved map → the light it brings itself).
+import { makeToon } from './toon.js';
+import { THREE, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex, note } from './common.js';
+import { B, installTimeline, stage, glowSprite, camAt, line, superAt, foot, signature, sigEvents, filmLook, eventsHelper, CY, RD, AM, PU } from './hit.js';
+
+bloom.threshold = 0.8; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.32; key.castShadow = false;
+stage(); const bgGlows = scene.children.filter(o => o.isSprite); bgGlows.forEach(g => { if (g.position.x > 0) g.visible = false; });
+
+// ---------- YOU, fixed look ----------
+const guy = makeToon({ skin: '#f2c29b', hair: '#2b1d16', shirt: '#3a6df0', pants: '#1f2547', shoes: '#c94a3a', hairStyle: 'cap' });
+guy.root.position.set(0, 0, 0); scene.add(guy.root);
+const HEAD = guy.head;
+const skinMats = []; HEAD.traverse(o => { if (o.material && o.material.type === 'MeshToonMaterial' && o.material.color.getHexString() === 'f2c29b') skinMats.push(o.material); });
+
+// ---------- the x-ray phone (generic, no brand) ----------
+const PH = new THREE.Group(); PH.position.set(0.02, 0.97, 0.8); scene.add(PH);
+const PW = 0.36, PHh = 0.74;
+const phTex = canvasTex(360, 740);
+const phBody = new THREE.Mesh(new THREE.PlaneGeometry(PW, PHh), new THREE.MeshBasicMaterial({ map: phTex.tex, transparent: true, toneMapped: false, side: THREE.DoubleSide, depthWrite: false })); PH.add(phBody);
+function drawPhone(t, unlocked, glow) { phTex.draw((x, w, h) => { x.clearRect(0, 0, w, h);
+  x.fillStyle = 'rgba(12,20,80,0.55)'; x.beginPath(); x.roundRect(6, 6, w - 12, h - 12, 46); x.fill();
+  x.strokeStyle = 'rgba(62,230,255,0.95)'; x.lineWidth = 8; x.stroke();
+  x.strokeStyle = 'rgba(62,230,255,0.35)'; x.lineWidth = 2; for (let gy = 120; gy < h - 30; gy += 40) { x.beginPath(); x.moveTo(30, gy); x.lineTo(w - 30, gy); x.stroke(); }
+  x.fillStyle = 'rgba(3,5,20,0.9)'; x.beginPath(); x.roundRect(w / 2 - 110, 26, 220, 54, 27); x.fill();
+  // lock icon
+  const cx = w / 2, cy = h * 0.5, col = unlocked > 0.5 ? '#7dffb0' : '#ffffff'; x.save(); x.globalAlpha = 0.6 + 0.4 * glow; x.strokeStyle = col; x.fillStyle = col; x.lineWidth = 14;
+  x.beginPath(); x.arc(cx, cy - 30 - unlocked * 26, 40, Math.PI, 0); x.lineTo(cx + 40, cy - 30 + (unlocked > 0.5 ? -26 : 0)); x.stroke();
+  x.beginPath(); x.roundRect(cx - 62, cy - 30, 124, 100, 16); x.fill(); x.restore(); }); }
+// sensor bar: flood (purple) · dot projector (red) · IR camera (cyan)
+const parts = {};
+for (const [k, xo, col, s] of [['flood', -0.085, PU, 0.017], ['proj', 0.0, RD, 0.022], ['cam', 0.085, CY, 0.02]]) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(s, 16, 12), new THREE.MeshBasicMaterial({ color: col, toneMapped: false })); m.position.set(xo, PHh / 2 - 0.05, 0.01); PH.add(m);
+  const g = glowSprite(col === RD ? 'rgba(255,59,92,1)' : col === CY ? 'rgba(62,230,255,1)' : 'rgba(155,107,255,1)', 0.22, 0.4); g.position.copy(m.position); PH.add(g); parts[k] = { m, g }; }
+const HC = new THREE.Vector3(0, 1.42, 0.0); // head centre (approx world)
+PH.lookAt(HC.x, HC.y + 0.05, HC.z); PH.rotateY(Math.PI); // back of phone toward camera, sensors toward face
+
+// ---------- the dot pattern on the face (head-local) ----------
+const GN = 46, GM = 40; const TH0 = 1.05, PH0 = 0.62; // grid: theta (horizontal), phi (vertical)
+function facePt(th, ph, r0 = 0.272) { let x = Math.sin(th) * Math.cos(ph) * r0, y = Math.sin(ph) * r0 * 1.05, z = Math.cos(th) * Math.cos(ph) * r0 * 0.95;
+  const dn = Math.hypot(x / 0.07, (y + 0.03) / 0.06); z += 0.04 * Math.max(0, 1 - dn * dn); return new THREE.Vector3(x, y, z); }
+const NDOT = GN * GM; const target = [], launch = [], seeds = [];
+{ let s = 11; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let j = 0; j < GM; j++) for (let i = 0; i < GN; i++) { const th = lerp(-TH0, TH0, (i + 0.5 + (r() - 0.5) * 0.8) / GN), ph = lerp(-PH0 - 0.15, PH0, (j + 0.5 + (r() - 0.5) * 0.8) / GM);
+    target.push(facePt(th, ph)); seeds.push(r()); } }
+const dotG = new THREE.BufferGeometry(); dotG.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(NDOT * 3), 3)); dotG.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(NDOT * 3), 3));
+const dotTex = (() => { const c = canvasTex(64, 64); c.draw((x) => { const g = x.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.45, 'rgba(255,255,255,0.9)'); g.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64); }); return c.tex; })();
+const dots = new THREE.Points(dotG, new THREE.PointsMaterial({ size: 0.016, map: dotTex, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+dots.frustumCulled = false; scene.add(dots); // world space (flying dots)
+// wire map (head-local)
+function wireGeo() { const p = []; const at = (i, j) => facePt(lerp(-TH0, TH0, i / (GN / 2)), lerp(-PH0 - 0.15, PH0, j / (GM / 2)), 0.276);
+  for (let j = 0; j <= GM / 2; j++) for (let i = 0; i <= GN / 2; i++) { const a = at(i, j); if (i < GN / 2) p.push(a, at(i + 1, j)); if (j < GM / 2) p.push(a, at(i, j + 1)); }
+  return new THREE.BufferGeometry().setFromPoints(p); }
+const wire = new THREE.LineSegments(wireGeo(), new THREE.LineBasicMaterial({ color: CY, transparent: true, opacity: 0, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false })); HEAD.add(wire);
+const ghost = new THREE.LineSegments(wireGeo(), new THREE.LineBasicMaterial({ color: '#33ff88', transparent: true, opacity: 0, toneMapped: true, depthWrite: false })); HEAD.add(ghost); const ghostFill = new THREE.Mesh(new THREE.SphereGeometry(0.272, 32, 20, Math.PI / 2 - 1.05, 2.1, Math.PI / 2 - 0.62, 1.39), new THREE.MeshBasicMaterial({ color: '#22ff77', transparent: true, opacity: 0, depthWrite: false, toneMapped: false, side: THREE.DoubleSide })); ghostFill.scale.set(1, 1.05, 0.95); ghost.add(ghostFill);
+// flood wash + beams
+const flood = glowSprite('rgba(155,107,255,1)', 1.1, 0); scene.add(flood);
+const beamG = new THREE.ConeGeometry(0.3, 1, 32, 1, true); beamG.translate(0, -0.5, 0); beamG.rotateX(-Math.PI / 2);
+const beam = new THREE.Mesh(beamG, new THREE.MeshBasicMaterial({ color: RD, transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })); scene.add(beam);
+const camBeam = new THREE.Mesh(beamG.clone(), new THREE.MeshBasicMaterial({ color: CY, transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false })); scene.add(camBeam);
+// the ceiling lamp (off)
+const lamp = new THREE.Group(); lamp.position.set(0.45, 1.9, 0.0); lamp.scale.setScalar(1.3); scene.add(lamp);
+{ const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 1.2), new THREE.MeshBasicMaterial({ color: '#2b3a9a' })); cord.position.y = 0.6; lamp.add(cord);
+  const shade = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.16, 28, 1, true), new THREE.MeshStandardMaterial({ color: '#1b2266', side: THREE.DoubleSide, emissive: '#0b1150', emissiveIntensity: 0.6 })); shade.position.y = 0.0; lamp.add(shade);
+  const se = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.ConeGeometry(0.17, 0.16, 14, 1, true)), new THREE.LineBasicMaterial({ color: '#5a6ad8', transparent: true, opacity: 0.7 })); lamp.add(se); }
+const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 20, 14), new THREE.MeshBasicMaterial({ color: '#3a3f6e' })); bulb.position.y = -0.09; lamp.add(bulb);
+const bulbG = glowSprite('rgba(255,210,140,1)', 1.2, 0); bulbG.position.y = -0.09; lamp.add(bulbG);
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  how: wt(0, 'How'), face0: wt(0, 'Face'), see: wt(0, 'see'), dark: wt(0, 'dark'),
+  l2: L[1].start, sprays: wt(1, 'sprays'), thirty: wt(1, 'thirty'), invisible: wt(1, 'invisible'), dots: wt(1, 'dots'), face2: wt(1, 'face'),
+  l3: L[2].start, infrared: wt(2, 'infrared'), camera: wt(2, 'camera'), maps: wt(2, 'maps'), three: wt(2, 'three'),
+  l4: L[3].start, light: wt(3, 'light'), floods: wt(3, 'floods'), whole: wt(3, 'whole'),
+  l5: L[4].start, map: wt(4, 'map'), checked: wt(4, 'checked'), saved: wt(4, 'saved'), face5: wt(4, 'face'),
+  l6: L[5].start, lights: wt(5, 'lights'), on: wt(5, 'on'), brings: wt(5, 'brings'), own: wt(5, 'own'),
+  slam: L[0].end + 0.06,
+}), () => { buildCam(); buildDots(); });
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.l6, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+function buildDots() { launch.length = 0; for (let k = 0; k < NDOT; k++) { const s = seeds[k];
+  // hook: a quarter of the pattern fires at once (the surprise); line 2: the rest sweeps in while the count runs
+  launch.push(k % 4 === 0 ? -0.4 + s * 0.9 : lerp(B.sprays, B.dots + 0.2, (k / NDOT) * 0.6 + s * 0.4)); } }
+
+let CK = [];
+function buildCam() {
+  CK = [
+    [-0.2, [0.38, 1.6, 2.4], [0.0, 1.57, 0.2]],
+    [B.see, [0.33, 1.58, 2.2], [0.0, 1.56, 0.2]],
+    [B.slam - 0.05, [0.3, 1.57, 2.1], [0.0, 1.56, 0.2]],
+    [B.slam + 0.4, [0.24, 1.45, 1.8], [0.0, 1.38, 0.3], 'whip'],
+    [B.l3 - 0.1, [0.2, 1.44, 1.68], [0.0, 1.38, 0.3]],
+    [B.l3 + 0.45, [0.95, 1.47, 1.95], [0.08, 1.4, 0.4], 'whip'],
+    [B.l4 - 0.1, [0.9, 1.46, 1.8], [0.08, 1.4, 0.4]],
+    [B.l4 + 0.45, [-0.4, 1.47, 1.85], [0.0, 1.41, 0.4], 'whip'],
+    [B.l5 - 0.1, [-0.36, 1.46, 1.75], [0.0, 1.41, 0.4]],
+    [B.l5 + 0.45, [0.34, 1.5, 2.35], [0.2, 1.43, 0.3], 'whip'],
+    [B.saved - 0.1, [0.32, 1.49, 2.25], [0.19, 1.43, 0.3]],
+    [B.saved + 0.35, [0.18, 1.47, 1.95], [0.05, 1.43, 0.3]],
+    [B.l6 - 0.1, [0.16, 1.47, 1.9], [0.05, 1.43, 0.3]],
+    [B.l6 + 0.45, [0.4, 1.58, 2.35], [0.25, 1.55, 0.2], 'whip'],
+    [B.brings - 0.05, [0.38, 1.57, 2.25], [0.24, 1.54, 0.2]],
+    [B.brings + 0.35, [0.18, 1.47, 1.85], [0.04, 1.44, 0.3], 'whip'],
+    [B.sig - 0.05, [0.15, 1.46, 1.75], [0.04, 1.44, 0.3]],
+    [B.sig + 0.5, [0.1, 1.46, 1.3], [0.0, 1.44, 0.2], 'whip'],
+    [B.end + 1, [0.1, 1.46, 1.25], [0.0, 1.44, 0.2]],
+  ]; }
+
+// ---------- state ----------
+const projW = new THREE.Vector3(), camW = new THREE.Vector3(), _t = new THREE.Vector3(), cRed = new THREE.Color(RD), cA = new THREE.Color(CY), cB = new THREE.Color(PU), cG = new THREE.Color('#7dffb0');
+function aimCone(m, from, to, rad) { const d = to.clone().sub(from); m.position.copy(from); m.scale.set(rad, rad, d.length()); m.lookAt(to); }
+function props(t) {
+  const mood = t < B.slam ? 'surprised' : t > B.l6 ? 'happy' : 'neutral';
+  const pose = t > B.brings ? 'point' : t > B.l5 && t < B.l6 ? 'hold' : 'hold';
+  guy.update(t, { pose, mood, headTurn: 0 });
+  guy.root.updateMatrixWorld(true);
+  PH.position.y = 0.97 + 0.01 * Math.sin(t * 1.7); PH.updateMatrixWorld(true);
+  parts.proj.m.getWorldPosition(projW); parts.cam.m.getWorldPosition(camW);
+  const headW = new THREE.Vector3(); HEAD.getWorldPosition(headW);
+  const unlocked = t > B.saved + 0.25 ? 1 : 0;
+  // projector pulses while spraying
+  const spray = Math.max(1 - seg(t, 1.0, 0.3), seg(t, B.sprays - 0.1, 0.15) * (1 - seg(t, B.face2, 0.3)), seg(t, B.brings - 0.1, 0.15) * (1 - seg(t, B.sig, 0.2)));
+  parts.proj.g.material.opacity = 0.25 + 0.7 * spray; parts.proj.g.scale.setScalar(0.22 + 0.12 * spray);
+  const camOn = seg(t, B.infrared - 0.1, 0.2) * (1 - seg(t, B.l4 + 0.1, 0.3)) + seg(t, B.l5, 0.2) * (1 - seg(t, B.l6, 0.2));
+  parts.cam.g.material.opacity = 0.25 + 0.7 * camOn; parts.cam.g.scale.setScalar(0.22 + 0.14 * camOn);
+  const fl = seg(t, B.l4 - 0.05, 0.3) * (1 - seg(t, B.l5 + 0.2, 0.4)); parts.flood.g.material.opacity = 0.25 + 0.7 * fl; parts.flood.g.scale.setScalar(0.22 + 0.2 * fl);
+  aimCone(beam, projW, headW.clone().add(new THREE.Vector3(0, -0.02, 0.15)), 0.3); beam.material.opacity = 0.09 * spray;
+  aimCone(camBeam, camW, headW.clone().add(new THREE.Vector3(0, -0.02, 0.15)), 0.3); camBeam.material.opacity = 0.1 * camOn;
+  // flood: violet wash on the face
+  flood.position.copy(headW).add(new THREE.Vector3(0, -0.02, 0.3)); flood.material.opacity = 0.32 * fl * (0.85 + 0.15 * Math.sin(t * 6));
+  skinMats.forEach(m => { m.emissive = m.emissive || new THREE.Color(); m.emissive.set(PU); m.emissiveIntensity = 0.3 * fl; });
+  // dots: fly from the projector, land on the face; colour = state
+  const P = dotG.attributes.position.array, C = dotG.attributes.color.array;
+  const depthOn = eio(seg(t, B.maps - 0.1, 0.4)), matchOn = eio(seg(t, B.saved, 0.3)) * (1 - seg(t, B.l6, 0.3));
+  const fade = (1 - 0.3 * seg(t, B.l4, 0.3) - 0.3 * depthOn) * (1 - seg(t, B.sig, 0.25)), reburst = seg(t, B.brings - 0.05, 0.25) * (1 - seg(t, B.sig, 0.25));
+  for (let k = 0; k < NDOT; k++) { const L0 = launch[k]; let u = clamp((t - L0) / 0.28); if (t < L0) { P[k * 3 + 1] = -99; continue; }
+    // the brings-its-own burst re-fires each dot from the projector
+    if (reburst > 0 && t > B.brings - 0.1) { const L1 = B.brings - 0.1 + seeds[k] * 0.35; u = t < L1 ? 1 : clamp((t - L1) / 0.25); }
+    _t.copy(target[k]); HEAD.localToWorld(_t); const e = eo(u); const x = lerp(projW.x, _t.x, e), y = lerp(projW.y, _t.y, e), z = lerp(projW.z, _t.z, e);
+    P[k * 3] = x; P[k * 3 + 1] = y; P[k * 3 + 2] = z;
+    let col = cRed.clone(); if (depthOn > 0) { const d = clamp((target[k].z - 0.12) / 0.2); col.lerp(cB.clone().lerp(cA, d), depthOn); } if (matchOn > 0) col.lerp(cG, matchOn * 0.7);
+    if (reburst > 0) col.lerp(cRed, reburst);
+    const tw = (u < 1 ? 1.3 : 1) * fade * (1 + 0.6 * reburst) * (0.8 + 0.2 * Math.sin(t * 9 + seeds[k] * 40));
+    C[k * 3] = col.r * tw; C[k * 3 + 1] = col.g * tw; C[k * 3 + 2] = col.b * tw; }
+  dotG.attributes.position.needsUpdate = true; dotG.attributes.color.needsUpdate = true;
+  dots.material.size = 0.016 + 0.006 * (1 - seg(t, B.slam, 0.4));
+  // wire map grows on "maps them in 3D", ghost (saved map) slides in and locks on
+  const wa = eio(seg(t, B.maps - 0.05, 0.5)); wire.material.opacity = 0.75 * wa * (1 - 0.2 * seg(t, B.l4, 0.3)) * (1 - seg(t, B.l6, 0.3)) + 0.0;
+  wire.scale.setScalar(1 + 0.004 * Math.sin(t * 5));
+  const gIn = eio(seg(t, B.saved - 0.1, 0.35)), gA = eo(seg(t, B.l5 + 0.1, 0.4)); ghost.material.opacity = 0.95 * seg(t, B.l5 + 0.1, 0.2) * (1 - seg(t, B.l6, 0.3)); ghost.position.set((1 - gIn) * 0.42 + (1 - gA) * 0.4, (1 - gIn) * 0.02, 0); ghost.rotation.y = 0; ghostFill.material.opacity = 0.28 * ghost.material.opacity * (1 - 0.6 * gIn);
+  drawPhone(t, unlocked, unlocked ? 1 : 0.3 + 0.3 * spray);
+  // the lamp: off the whole time; called out on "lights"
+  const la = seg(t, B.lights - 0.1, 0.2) * (1 - seg(t, B.sig, 0.2)); bulb.material.color.set(la > 0.5 ? '#4a4f80' : '#2a2e55'); bulbG.material.opacity = 0;
+  lamp.visible = t > B.l6 - 0.1 && t < B.brings - 0.1; const dk = seg(t, B.l6, 0.3) * (1 - seg(t, B.sig, 0.2)); key.intensity = 0.32 * (1 - 0.6 * dk); bgGlows.forEach(g => g.material.opacity = 0.32 * (1 - 0.6 * dk));
+}
+
+// ---------- type ----------
+const _v = new THREE.Vector3(); const scr = v => { _v.copy(v).project(cam); return [(_v.x + 1) / 2 * W, (1 - _v.y) / 2 * H]; };
+function tag(s, p, col, a, dx = 0, dy = -60) { if (a <= 0) return; const [x, y] = scr(p); dx += (540 - x) * 0.45; ui.save(); ui.globalAlpha = a; ui.strokeStyle = col; ui.lineWidth = 4; ui.beginPath(); ui.moveTo(x, y); ui.lineTo(x + dx, y + dy); ui.stroke();
+  ui.font = '700 46px Poppins'; ui.textAlign = 'center'; ui.textBaseline = 'middle'; const w = ui.measureText(s).width + 40; { const tx = clamp(x + dx, 60 + w / 2, 1020 - w / 2), ty = Math.min(y + dy, 1430); dx = tx - x; dy = ty - y; } ui.fillStyle = 'rgba(3,5,20,0.85)'; ui.beginPath(); ui.roundRect(x + dx - w / 2, y + dy - 34, w, 68, 34); ui.fill(); ui.strokeStyle = col; ui.stroke();
+  ui.fillStyle = col; ui.fillText(s, x + dx, y + dy + 2); ui.restore(); }
+function bigCount(t, at, until, y) { if (t < at - 0.05 || t > until) return; const age = t - at + 0.05, v = Math.round(30000 * eo(clamp(age / 0.6))); const s = String(v).padStart(5, '0'); const chars = [s[0], s[1], ',', s[2], s[3], s[4], '+'];
+  const sl = 1 + (age > 0.6 ? 0.25 * Math.exp(-(age - 0.6) * 10) : 0); ui.save(); ui.globalAlpha = clamp((until - t) / 0.15); ui.translate(540, y); ui.scale(sl, sl); ui.font = '700 200px Poppins'; ui.textBaseline = 'middle'; ui.textAlign = 'center';
+  const ws = chars.map(c => c === ',' ? 60 : c === '+' ? 120 : 125); const tot = ws.reduce((a, b) => a + b, 0); let x = -tot / 2;
+  chars.forEach((c, i) => { ui.shadowColor = c === '+' ? RD : 'rgba(0,0,0,0.8)'; ui.shadowBlur = 40; ui.fillStyle = c === '+' ? RD : '#ffffff'; ui.fillText(c, x + ws[i] / 2, c === ',' ? 20 : 0); x += ws[i]; }); ui.restore(); }
+function drawType(t) {
+  { const g = ui.createLinearGradient(0, 0, 0, 800); g.addColorStop(0, 'rgba(2,3,12,0.6)'); g.addColorStop(1, 'rgba(2,3,12,0)'); ui.fillStyle = g; ui.fillRect(0, 0, W, 800); }
+  if (t < B.slam + 0.22) { const bl = seg(t, B.slam, 0.2); ui.save(); ui.translate(540, 470); const s0 = (1 + 0.02 * Math.sin(t * 5)) * (1 + bl * 0.5); ui.scale(s0, s0); ui.translate(-540, -470); ui.globalAlpha = 1 - bl;
+    const o = { from: 1.0 }, kick = t > B.dark ? Math.exp(-(t - B.dark) * 8) : 0;
+    line([['HOW', -1], ['DOES', -1]], 282, 108, 5, o);
+    line([['FACE ID', -1, RD]], 425, 170, 5, o);
+    line([['SEE', -1], ['YOU', -1], ['IN', -1], ['THE', -1]], 568, 108, 5, o);
+    ui.save(); ui.translate(540, 700); ui.scale(1 + 0.1 * kick, 1 + 0.1 * kick); ui.translate(-540, -700); line([['DARK?', -1, CY]], 700, 170, 5, o); ui.restore(); ui.restore(); }
+  superAt(t, 'SPRAYS DOTS', B.sprays - 0.05, B.thirty - B.sprays, 330, 140, RD);
+  bigCount(t, B.thirty, B.invisible - 0.05, 330);
+  superAt(t, 'INVISIBLE DOTS', B.invisible - 0.05, B.l3 - B.invisible + 0.05, 330, 120, RD);
+  superAt(t, 'INFRARED CAMERA', B.infrared - 0.05, B.maps - B.infrared, 330, 112, CY);
+  superAt(t, '3D MAP', B.maps - 0.05, B.l4 - B.maps + 0.05, 330, 210, CY);
+  superAt(t, 'INVISIBLE LIGHT', B.l4 - 0.02, B.floods - B.l4 + 0.05, 330, 120, PU);
+  superAt(t, 'FLOODS YOUR FACE', B.floods - 0.05, B.l5 - B.floods + 0.05, 330, 105, '#ffffff');
+  superAt(t, 'CHECKED', B.checked - 0.05, B.saved - B.checked, 330, 170, '#ffffff');
+  superAt(t, '✓ SAVED FACE', B.saved - 0.05, B.l6 - B.saved + 0.05, 330, 130, '#7dffb0');
+  superAt(t, 'NO LIGHTS NEEDED', B.lights - 0.25, B.brings - B.lights + 0.2, 330, 112, '#ffffff');
+  if (t > B.brings - 0.05 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) }; line([['IT', B.brings - 0.05], ['BRINGS', B.brings - 0.05]], 290, 130, t, o); line([['ITS', B.own - 0.05], ['OWN.', B.own - 0.05, RD]], 440, 170, t, o); }
+  // part call-outs on the phone
+  parts.proj.m.getWorldPosition(projW); parts.cam.m.getWorldPosition(camW); const flW = new THREE.Vector3(); parts.flood.m.getWorldPosition(flW);
+  tag('DOT PROJECTOR', projW, RD, seg(t, B.sprays - 0.05, 0.15) * (1 - seg(t, B.thirty - 0.05, 0.15)), 0, 150);
+  tag('IR CAMERA', camW, CY, seg(t, B.camera - 0.15, 0.15) * (1 - seg(t, B.maps + 0.1, 0.15)), 0, 150);
+  tag('FLOOD LIGHT', flW, PU, seg(t, B.light - 0.1, 0.15) * (1 - seg(t, B.floods + 0.2, 0.15)), 0, 150);
+  { const lb = new THREE.Vector3(); bulb.getWorldPosition(lb); const a = seg(t, B.lights - 0.1, 0.15) * (1 - seg(t, B.brings - 0.05, 0.15)); if (a > 0) { tag('LIGHTS OFF', lb, '#b8c0ff', a, 0, 120); } }
+  const fa = (t > B.slam && t < B.sig) ? clamp((t - B.slam) / 0.3) * (1 - seg(t, B.sig - 0.2, 0.2)) : 0;
+  if (fa > 0) { ui.save(); ui.globalAlpha = 0.55 * fa; ui.fillStyle = '#02030c'; ui.beginPath(); ui.roundRect(150, 1468, 780, 54, 27); ui.fill(); ui.restore(); } foot('Illustrative model · not to scale · Source: Apple (2017)', fa * 1.25, 1505);
+}
+
+// ---------- sound cue sheet (clean tonal only) ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  ev(0.05, 'pop', 1.0); ev(0.2, 'swish', 0.8); ev(0.45, 'ping', 0.5); ev(B.face0, 'tick', 0.7); ev(B.dark, 'pop2', 1.0); ev(B.slam, 'slam', 1.2); ev(B.slam, 'whoosh', 1);
+  ev(B.sprays - 0.05, 'swish', 0.9); ev(B.thirty - 0.05, 'super', 0.9); ev(B.thirty + 0.55, 'ping', 0.7); ev(B.invisible - 0.05, 'pop2', 0.8); ev(B.dots, 'click', 0.6);
+  ev(B.l3 + 0.1, 'whoosh'); ev(B.infrared - 0.05, 'pop', 0.8); ev(B.maps - 0.05, 'slam', 0.7); ev(B.three, 'ping', 0.6);
+  ev(B.l4 + 0.1, 'whoosh'); ev(B.l4, 'super', 0.8); ev(B.floods - 0.05, 'swish', 0.8);
+  ev(B.l5 + 0.1, 'whoosh'); ev(B.checked - 0.05, 'card', 0.8); ev(B.saved - 0.05, 'pop2', 0.9); ev(B.saved + 0.15, 'ping', 0.8);
+  ev(B.l6 + 0.1, 'whoosh', 0.9); ev(B.lights - 0.25, 'tick', 0.8); ev(B.brings - 0.05, 'swish', 0.9); ev(B.own - 0.05, 'slam', 0.8); ev(B.own + 0.05, 'ping', 0.6);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.slam, B.maps] }); props(t);
+  bloom.strength = 0.6 + (t > B.slam ? 0.4 * Math.exp(-(t - B.slam) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawType(t); signature(t, '', RD); note('Illustrative model · not affiliated with Apple', clamp((t - B.sig - 0.38) / 0.18), 1440); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>
