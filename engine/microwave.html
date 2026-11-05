@@ -1,0 +1,241 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// Does your microwave cook food from the inside? One visual thread: the x-ray cut face of a bowl of leftovers = a live heat map
+// (frozen core → waves heat a 1-inch shell → water shakes → heat crawls inward → stir/stand → "outside cooked, middle gets leftovers").
+import { makeToon } from './toon.js';
+import { THREE, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex } from './common.js';
+import { B, installTimeline, stage, glowSprite, camAt, line, superAt, foot, signature, sigEvents, filmLook, eventsHelper, CY, RD, AM, PU } from './hit.js';
+import { note } from './common.js';
+
+bloom.threshold = 0.82; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.55; key.castShadow = false;
+stage();
+const BX = 0.3, BY = 0.64, R0 = 0.32, R1 = 0.47, FH = 0.42, F0 = 0.03, P = 0.13; // food: y in [F0, F0+FH], P = ~1 inch shell
+
+// ---------- the guy, fixed look ----------
+const guy = makeToon({ skin: '#f2c29b', hair: '#2b1d16', shirt: '#3a6df0', pants: '#1f2547', shoes: '#c94a3a', hairStyle: 'cap' });
+guy.root.position.set(-0.44, 0, 0.35); guy.root.rotation.y = 0.55; guy.root.scale.setScalar(0.7); scene.add(guy.root);
+
+// ---------- counter + x-ray microwave ----------
+const counter = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.6, 1.3), new THREE.MeshStandardMaterial({ color: '#0d1340', roughness: 0.8, emissive: '#05081f', emissiveIntensity: 0.6 })); counter.position.set(BX, 0.3, -0.1); scene.add(counter);
+const mw = new THREE.Group(); mw.position.set(BX, 0.6, -0.1); scene.add(mw);
+const mwG = new THREE.BoxGeometry(1.7, 1.0, 1.2); const mwEdge = new THREE.LineSegments(new THREE.EdgesGeometry(mwG), new THREE.LineBasicMaterial({ color: CY, transparent: true, opacity: 0.55, toneMapped: false })); mwEdge.position.y = 0.5; mw.add(mwEdge);
+const mwBack = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.0), new THREE.MeshBasicMaterial({ color: '#0b1150', transparent: true, opacity: 0.55 })); mwBack.position.set(0, 0.5, -0.6); mw.add(mwBack);
+const mag = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 0.3), new THREE.MeshBasicMaterial({ color: PU, toneMapped: false })); mag.position.set(0.73, 0.82, -0.2); mw.add(mag);
+const magG = glowSprite('rgba(155,107,255,1)', 0.9, 0.5); magG.position.copy(mag.position); mw.add(magG);
+const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.015, 48), new THREE.MeshPhysicalMaterial({ color: '#7f9cff', transparent: true, opacity: 0.35, roughness: 0.1, emissive: '#1a2a80', emissiveIntensity: 0.4 })); plate.position.set(0, 0.03, 0.1); mw.add(plate);
+const rollers = new THREE.Group(); for (let i = 0; i < 8; i++) { const s = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), new THREE.MeshBasicMaterial({ color: CY, toneMapped: false })); const a = i / 8 * Math.PI * 2; s.position.set(Math.cos(a) * 0.56, 0.045, Math.sin(a) * 0.56); rollers.add(s); } rollers.position.z = 0.1; mw.add(rollers);
+const lamp = glowSprite('rgba(255,181,71,1)', 2.4, 0.18); lamp.position.set(0, 0.85, -0.2); mw.add(lamp);
+
+// ---------- the bowl (back half, x-ray) + food cut face ----------
+const bowl = new THREE.Group(); bowl.position.set(BX, BY, 0); scene.add(bowl);
+const prof = []; for (let i = 0; i <= 12; i++) { const u = i / 12; prof.push(new THREE.Vector2(lerp(R0 + 0.02, R1 + 0.05, u) - (i === 0 ? R0 : 0), u * (FH + 0.08))); } prof.unshift(new THREE.Vector2(0, 0));
+const bowlM = new THREE.MeshPhysicalMaterial({ color: '#5b7cff', transparent: true, opacity: 0.4, roughness: 0.2, metalness: 0.1, side: THREE.DoubleSide, depthWrite: false, emissive: '#1a2a80', emissiveIntensity: 0.5 });
+bowl.add(new THREE.Mesh(new THREE.LatheGeometry(prof, 48, Math.PI / 2, Math.PI), bowlM));
+const cutRim = []; for (const s of [-1, 1]) for (let i = 1; i < prof.length; i++) cutRim.push(new THREE.Vector3(s * prof[i].x, prof[i].y, 0.002));
+const rimL = new THREE.Line(new THREE.BufferGeometry().setFromPoints(cutRim.slice(0, prof.length - 1).reverse().concat([new THREE.Vector3(0, 0, 0.002)]).concat(cutRim.slice(prof.length - 1))), new THREE.LineBasicMaterial({ color: CY, transparent: true, opacity: 0.9, toneMapped: false })); bowl.add(rimL);
+const rw = y => R0 + (R1 - R0) * clamp(y / FH); // food half-width at height y (food-local)
+// cut face
+const TW = 256, TH = 230, heat = canvasTex(TW, TH), hc = heat.tex.image.getContext ? heat.tex.image.getContext('2d') : null;
+const fshape = new THREE.Shape(); fshape.moveTo(-R0, 0); fshape.lineTo(R0, 0); fshape.lineTo(R1, FH); fshape.lineTo(-R1, FH); fshape.closePath();
+const fg = new THREE.ShapeGeometry(fshape, 1); { const p = fg.attributes.position.array, uv = fg.attributes.uv.array; for (let i = 0; i < p.length / 3; i++) { uv[i * 2] = (p[i * 3] + R1) / (2 * R1); uv[i * 2 + 1] = p[i * 3 + 1] / FH; } }
+const face = new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ map: heat.tex, toneMapped: false, side: THREE.DoubleSide })); face.position.set(0, F0, 0.004); bowl.add(face);
+const top = new THREE.Mesh(new THREE.CircleGeometry(R1, 48, 0, Math.PI), new THREE.MeshStandardMaterial({ color: '#c0603a', roughness: 0.7, emissive: '#ff5a2a', emissiveIntensity: 0.25, side: THREE.DoubleSide })); top.rotation.x = -Math.PI / 2; top.position.y = F0 + FH; bowl.add(top);
+// the 1-inch line (dashed contour at depth P)
+const inner = []; { const n = 40; const ys = [P, FH - P]; const pts = [[-(rw(P) - P * 1.05), P], [rw(P) - P * 1.05, P], [rw(FH - P) - P * 1.05, FH - P], [-(rw(FH - P) - P * 1.05), FH - P], [-(rw(P) - P * 1.05), P]]; pts.forEach(q => inner.push(new THREE.Vector3(q[0], q[1] + F0, 0.012))); }
+const dashG = new THREE.BufferGeometry().setFromPoints(inner); const dash = new THREE.Line(dashG, new THREE.LineDashedMaterial({ color: '#ffffff', dashSize: 0.025, gapSize: 0.018, transparent: true, opacity: 0, toneMapped: false })); dash.computeLineDistances(); bowl.add(dash);
+// slice line for the hook reveal
+const slice = new THREE.Mesh(new THREE.PlaneGeometry(R1 * 2.3, 0.012), new THREE.MeshBasicMaterial({ color: CY, transparent: true, toneMapped: false })); slice.position.z = 0.02; bowl.add(slice);
+const sliceG = glowSprite('rgba(62,230,255,1)', 0.5, 0); bowl.add(sliceG);
+// steam
+const steam = []; for (let i = 0; i < 5; i++) { const s = glowSprite('rgba(200,210,255,1)', 0.22, 0); s.userData = { x: (i - 2) * 0.16, w: i * 1.7 }; bowl.add(s); steam.push(s); }
+
+// ---------- per-pixel distance to the food surface (static) ----------
+const cosT = Math.cos(Math.atan((R1 - R0) / FH));
+const D = new Float32Array(TW * TH), IN = new Uint8Array(TW * TH), NZ = new Float32Array(TW * TH), XY = [];
+{ let s = 5; for (let j = 0; j < TH; j++) for (let i = 0; i < TW; i++) { const k = j * TW + i; const x = (i + 0.5) / TW * 2 * R1 - R1, y = (1 - (j + 0.5) / TH) * FH;
+  const ds = (rw(y) - Math.abs(x)) * cosT; IN[k] = ds > -0.004 ? 1 : 0; D[k] = Math.max(0, Math.min(ds, y, FH - y)); s = (s * 16807) % 2147483647; NZ[k] = s / 2147483647; } }
+const toPx = (x, y) => [(x + R1) / (2 * R1) * TW, (1 - y / FH) * TH];
+const STOPS = [[0, [215, 250, 255]], [0.14, [62, 200, 255]], [0.34, [34, 44, 130]], [0.62, [255, 181, 71]], [1, [255, 59, 92]]];
+function cmap(c) { for (let i = 1; i < STOPS.length; i++) if (c <= STOPS[i][0]) { const a = STOPS[i - 1], b = STOPS[i], u = (c - a[0]) / (b[0] - a[0]); return [lerp(a[1][0], b[1][0], u), lerp(a[1][1], b[1][1], u), lerp(a[1][2], b[1][2], u)]; } return STOPS[STOPS.length - 1][1]; }
+const sm = (a, b, x) => { const u = clamp((x - a) / (b - a)); return u * u * (3 - 2 * u); };
+const shellMask = d => 1 - sm(P - 0.018, P + 0.018, d);
+
+// temperature 0..1 at depth d, time t
+function temp(d, t, n) {
+  const hookState = shellMask(d) * (0.88 + 0.12 * (1 - d / P)) + (1 - shellMask(d)) * lerp(0.3, 0.03, sm(P, P + 0.07, d));
+  const toCold = eio(seg(t, B.l2 - 0.12, 0.3));
+  if (toCold < 1) return lerp(hookState, 0.07, toCold);
+  // L2/L3: waves heat only the shell
+  const sh = eio(seg(t, B.about - 0.1, 0.9)) * 0.7 + 0.3 * eio(seg(t, B.heat - 0.1, 0.4));
+  let c = lerp(0.07, 0.97 - 0.12 * (d / P), sh * shellMask(d));
+  // L4: heat crawls inward by conduction
+  const sp = eio(seg(t, B.warms - 0.1, B.l5 - B.warms + 0.1));
+  if (sp > 0) { const reach = P + 0.02 + 0.2 * sp; const inward = clamp(1 - (d - P) / (reach - P)); c = Math.max(c, lerp(0.07, 0.62, sp) * inward + 0.2 * sp * (1 - inward)); }
+  // L5: stir + stand evens it out
+  const mx = eio(seg(t, B.stir - 0.05, B.l6 - B.stir)); if (mx > 0) c = lerp(c, 0.7 + 0.05 * Math.sin(n * 40 + t * 3), mx * 0.9);
+  // L6: the punchline state — outside cooked, middle gets the leftovers
+  const fin = eio(seg(t, B.l6 - 0.1, 0.35)); if (fin > 0) { const f = shellMask(d) * (0.92 + 0.08 * (1 - d / P)) + (1 - shellMask(d)) * lerp(0.6, 0.4, sm(P, P + 0.1, d)); c = lerp(c, f, fin); }
+  return c; }
+function drawHeat(t) { const x = heat.tex.image.getContext('2d'); const img = x.createImageData(TW, TH), px = img.data;
+  const sweep = 1 - eio(seg(t, -0.12, 0.45)); // fraction of height still un-revealed (from the bottom)
+  for (let j = 0; j < TH; j++) { const yn = 1 - (j + 0.5) / TH; for (let i = 0; i < TW; i++) { const k = j * TW + i, o = k * 4; if (!IN[k]) { px[o + 3] = 0; continue; }
+    let r, g, b; if (yn < sweep) { const n = 0.85 + 0.15 * NZ[k]; r = 120 * n; g = 72 * n; b = 52 * n; }
+    else { const c = temp(D[k], t, NZ[k]); [r, g, b] = cmap(c); if (c < 0.18 && NZ[k] > 0.965) { r = g = b = 255; } }
+    px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255; } }
+  x.putImageData(img, 0, 0);
+  // heat arrows (conduction) on L4 and on "leftovers"
+  const ar = clamp(seg(t, B.warms - 0.1, 0.25)) * (1 - seg(t, B.stir - 0.2, 0.2)) + clamp(seg(t, B.leftovers - 0.15, 0.25)) * (1 - seg(t, B.sig - 0.1, 0.2));
+  if (ar > 0) { const sites = [[-1, 0.3], [-1, 0.7], [1, 0.3], [1, 0.7], [0, 1], [0, 0]]; x.save(); x.globalAlpha = ar; x.strokeStyle = '#ffd27a'; x.lineWidth = 10; x.lineCap = 'round'; x.lineJoin = 'round';
+    sites.forEach(([sx, sy], q) => { const ph = ((t * 0.9 + q * 0.17) % 1); let px0, py0, dx, dy; if (sx) { const y = sy * FH; px0 = sx * (rw(y) - 0.05); py0 = y; dx = -sx; dy = 0; } else { px0 = (q % 2 ? -0.08 : 0.08); py0 = sy ? FH - 0.05 : 0.05; dx = 0; dy = sy ? -1 : 1; }
+      const L = 0.03 + 0.12 * ph, cx = px0 + dx * L, cy = py0 + dy * L; const [u, v] = toPx(cx, cy); const s = 30; const a = Math.atan2(-dy, dx);
+      x.globalAlpha = ar * Math.sin(ph * Math.PI); x.beginPath(); x.moveTo(u - Math.cos(a - 0.7) * s, v - Math.sin(a - 0.7) * s); x.lineTo(u, v); x.lineTo(u - Math.cos(a + 0.7) * s, v - Math.sin(a + 0.7) * s); x.stroke(); }); x.restore(); }
+  // stir swirl
+  const sw = clamp(seg(t, B.stir - 0.05, 0.2)) * (1 - seg(t, B.let + 0.2, 0.3)); if (sw > 0) { x.save(); x.globalAlpha = 0.9 * sw; x.strokeStyle = '#ffffff'; x.lineWidth = 9; const [cu, cv] = toPx(0, FH * 0.5); x.beginPath();
+    for (let a = 0; a < 9; a += 0.1) { const r = 6 + a * 9; x.lineTo(cu + Math.cos(a + t * 7) * r * 1.4, cv + Math.sin(a + t * 7) * r * 0.75); } x.stroke(); x.restore(); }
+  heat.tex.needsUpdate = true; }
+
+// ---------- microwaves: purple waves that die out ~1 inch in ----------
+const waves = []; const WN = 70;
+for (const [side, h] of [[-1, 0.12], [-1, 0.3], [1, 0.12], [1, 0.3], [0, -0.14], [0, 0.14]]) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(WN * 3), 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(WN * 3), 3));
+  const l = new THREE.Line(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false })); l.userData = { side, h }; l.position.z = 0.016; bowl.add(l); waves.push(l); }
+const pu = new THREE.Color(PU), pw = new THREE.Color('#d8c6ff');
+function setWaves(t, a) { waves.forEach((l, q) => { l.visible = a > 0.01; if (!l.visible) return; const { side, h } = l.userData; const p = l.geometry.attributes.position.array, c = l.geometry.attributes.color.array;
+  for (let i = 0; i < WN; i++) { const u = i / (WN - 1); let x, y, depth;
+    if (side) { const y0 = F0 + h * FH / 0.42; const edge = rw(y0 - F0); const x0 = side * 1.0, x1 = side * (edge - P); x = lerp(x0, x1, u); y = y0 + 0.022 * Math.sin((Math.abs(x) * 38) - t * 16); depth = side * (side * edge - x * side) * -1; depth = edge - Math.abs(x); }
+    else { const x0 = h; x = x0 + 0.022 * Math.sin(0); const yTop = F0 + FH; y = lerp(yTop + 0.75, yTop - P, u); x = x0 + 0.022 * Math.sin(y * 38 - t * 16); depth = yTop - y; }
+    p[i * 3] = x; p[i * 3 + 1] = y; p[i * 3 + 2] = 0; const fade = depth < 0 ? 1 : clamp(1 - depth / P); const col = pu.clone().lerp(pw, 0.4 * fade); const k = a * (depth < 0 ? 0.9 : fade);
+    c[i * 3] = col.r * k; c[i * 3 + 1] = col.g * k; c[i * 3 + 2] = col.b * k; }
+  l.geometry.attributes.position.needsUpdate = true; l.geometry.attributes.color.needsUpdate = true; }); }
+
+// ---------- water molecules on the cut face ----------
+const mols = []; { let s = 17; const r = () => (s = (s * 16807) % 2147483647) / 2147483647; let shell = 0, core = 0, guard = 0;
+  while ((shell < 10 || core < 6) && guard++ < 4000) { const y = r() * FH, x = (r() * 2 - 1) * rw(y); const d = Math.min((rw(y) - Math.abs(x)) * cosT, y, FH - y); const isS = d > 0.025 && d < P - 0.02, isC = d > P + 0.04;
+    if ((isS && shell < 10) || (isC && core < 6)) { if (isS) shell++; else core++;
+      const g = new THREE.Group(); const om = new THREE.MeshBasicMaterial({ color: '#e0505a', transparent: true }), hm = new THREE.MeshBasicMaterial({ color: '#b8c4ee', transparent: true });
+      const o = new THREE.Mesh(new THREE.SphereGeometry(0.02, 14, 10), om); g.add(o); for (const sx of [-1, 1]) { const hh = new THREE.Mesh(new THREE.SphereGeometry(0.012, 10, 8), hm); hh.position.set(sx * 0.02, -0.014, 0); g.add(hh); }
+      g.userData = { x, y: y + F0, shell: isS, w: r() * 6, om, hm }; g.position.set(x, y + F0, 0.03); bowl.add(g); mols.push(g); } } }
+// spoon
+const spoon = new THREE.Group(); { const m = new THREE.MeshStandardMaterial({ color: '#c9d4ff', metalness: 0.8, roughness: 0.25, emissive: '#2a3a90', emissiveIntensity: 0.5 });
+  const h = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.32, 12), m); h.position.y = 0.16; spoon.add(h); const s = new THREE.Mesh(new THREE.SphereGeometry(0.05, 16, 10), m); s.scale.set(1, 0.4, 1.3); spoon.add(s); } spoon.rotation.z = -0.6; bowl.add(spoon);
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  does: wt(0, 'Does'), micro: wt(0, 'microwave'), cook: wt(0, 'cook'), inside: wt(0, 'inside'),
+  l2: L[1].start, no: wt(1, 'No'), only: wt(1, 'only'), about: wt(1, 'about'), inch: wt(1, 'inch'),
+  l3: L[2].start, water: wt(2, 'water'), shake: wt(2, 'shake'), heat: wt(2, 'heat'),
+  l4: L[3].start, middle: wt(3, 'middle'), warms: wt(3, 'warms'), spreads: wt(3, 'spreads'), inward: wt(3, 'inward'),
+  l5: L[4].start, stir: wt(4, 'stir'), let: wt(4, 'let'), stand: wt(4, 'stand'),
+  l6: L[5].start, cooks: wt(5, 'cooks'), outside: wt(5, 'outside'), middle2: wt(5, 'middle'), gets: wt(5, 'gets'), leftovers: wt(5, 'leftovers'),
+  slam: L[0].end + 0.06,
+}), () => { buildCam(); });
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.l6, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+const FC = BY + F0 + FH / 2; // cut-face centre height
+let CK = [];
+function buildCam() {
+  CK = [
+    [-0.2, [0.12, 1.5, 3.45], [0.18, 1.22, 0]],
+    [B.inside, [0.16, 1.45, 3.15], [0.2, 1.2, 0]],
+    [B.slam - 0.05, [0.2, 1.42, 3.0], [0.22, 1.18, 0]],
+    [B.slam + 0.45, [BX, 1.22, 2.45], [BX, 1.12, 0], 'whip'],
+    [B.inch, [BX + 0.03, 1.2, 2.3], [BX, 1.1, 0]],
+    [B.l3 - 0.1, [BX + 0.05, 1.2, 2.25], [BX, 1.1, 0]],
+    [B.l3 + 0.45, [BX + 0.06, 1.17, 1.9], [BX + 0.06, 1.06, 0], "whip"],
+    [B.l4 - 0.1, [BX + 0.05, 1.16, 1.82], [BX + 0.05, 1.05, 0]],
+    [B.l4 + 0.45, [BX, 1.2, 2.3], [BX, 1.1, 0], 'whip'],
+    [B.l5 - 0.1, [BX - 0.04, 1.22, 2.25], [BX, 1.1, 0]],
+    [B.l5 + 0.4, [BX + 0.25, 1.75, 2.1], [BX, 1.05, 0], 'whip'],
+    [B.l6 - 0.1, [BX + 0.2, 1.7, 2.05], [BX, 1.05, 0]],
+    [B.l6 + 0.4, [BX, 1.22, 2.35], [BX, 1.12, 0], 'whip'],
+    [B.sig - 0.05, [BX, 1.15, 1.85], [BX, 1.06, 0]],
+    [B.sig + 0.5, [BX, 1.1, 1.3], [BX, 1.05, 0], 'whip'],
+    [B.end + 1, [BX, 1.1, 1.25], [BX, 1.05, 0]],
+  ]; }
+
+// ---------- state ----------
+function props(t) {
+  drawHeat(t);
+  // hook: bowl drops onto the turntable already spinning; the slice reveals the cold core
+  const land = eo(seg(t, 0, 0.25)); bowl.position.y = BY + (1 - land) * 0.25; bowl.scale.setScalar(0.85 + 0.15 * land + 0.04 * Math.sin(seg(t, 0.25, 0.25) * Math.PI));
+  rollers.rotation.y = t * 1.2; plate.rotation.y = t * 1.2;
+  const sw = 1 - eio(seg(t, -0.12, 0.45)); slice.visible = t < 0.35; slice.position.y = F0 + sw * FH; slice.material.opacity = 1; sliceG.position.set(0, slice.position.y, 0.03); sliceG.material.opacity = slice.visible ? 0.6 : 0;
+  // microwave fades as we go inside
+  const inA = 1 - eio(seg(t, B.slam - 0.1, 0.4)) * 0.75; mwEdge.material.opacity = 0.55 * inA; mwBack.material.opacity = 0.55 * inA;
+  const on = (t < B.l2 - 0.1 || (t > B.l2 && t < B.l4)) ? 1 : 0.3; mag.material.color.set(on > 0.5 ? PU : '#4a3a80'); magG.material.opacity = 0.5 * on + 0.15 * on * Math.sin(t * 20); lamp.material.opacity = 0.18 * on;
+  // steam (hook and end)
+  const st = Math.max(1 - seg(t, B.l2 - 0.2, 0.3), seg(t, B.l6, 0.4)); steam.forEach((s, i) => { const ph = (t * 0.5 + i * 0.21) % 1; s.position.set(s.userData.x + 0.03 * Math.sin(t * 2 + s.userData.w), F0 + FH + 0.05 + ph * 0.45, -0.1); s.material.opacity = 0.25 * st * Math.sin(ph * Math.PI); });
+  top.material.emissiveIntensity = t < B.l2 ? 0.25 : t < B.l6 ? 0.05 + 0.25 * eio(seg(t, B.about, 0.8)) : 0.35;
+  // waves on L2 (strong) and L3 (soft)
+  window.__wa = (eio(seg(t, B.only - 0.1, 0.35)) * (1 - 0.6 * seg(t, B.l3 + 0.2, 0.3)) * (1 - seg(t, B.l4 - 0.1, 0.25)));
+  dash.material.opacity = 0.85 * eio(seg(t, B.about - 0.1, 0.3)) * (1 - seg(t, B.l4 + 0.2, 0.3)) + 0.7 * eio(seg(t, B.outside - 0.1, 0.3)) * (1 - seg(t, B.sig - 0.1, 0.2));
+  // molecules: shell ones shake hard, core ones barely move
+  const ma = eio(seg(t, B.l3 - 0.1, 0.3)) * (1 - seg(t, B.l4 + 0.3, 0.3)); const shk = seg(t, B.shake - 0.1, 0.2);
+  mols.forEach(g => { const d = g.userData; g.visible = ma > 0.01; if (!g.visible) return; const amp = d.shell ? 0.004 + 0.016 * shk : 0.002;
+    g.position.set(d.x + amp * Math.sin(t * 47 + d.w), d.y + amp * Math.cos(t * 53 + d.w * 2), 0.03); g.rotation.z = d.shell ? 0.3 * shk * Math.sin(t * 40 + d.w) : 0.05 * Math.sin(t + d.w);
+    d.om.opacity = ma; d.hm.opacity = ma; d.om.color.set(d.shell && shk > 0.5 ? '#e0902a' : '#e0505a'); g.scale.setScalar(1.35 + (d.shell ? 0.2 * shk : 0)); });
+  // spoon stirs on L5
+  const sp = eio(seg(t, B.stir - 0.25, 0.25)) * (1 - eio(seg(t, B.let + 0.1, 0.3))); spoon.visible = sp > 0.01; const an = t * 7; spoon.position.set(Math.cos(an) * 0.18, F0 + FH - 0.02 + (1 - sp) * 0.8, -0.12 + Math.sin(an) * 0.1);
+  // the guy
+  const mood = t < B.slam ? 'surprised' : t > B.l6 ? 'happy' : t > B.no - 0.05 && t < B.only ? 'surprised' : 'neutral';
+  const pose = t < B.slam ? 'surprised' : t > B.cooks ? 'point' : t > B.l5 && t < B.l6 ? 'hold' : t > B.l2 && t < B.l3 ? 'explain' : 'idle';
+  guy.update(t, { pose, mood, headTurn: 0.35 });
+}
+
+// ---------- type ----------
+function drawType(t) {
+  { const g = ui.createLinearGradient(0, 0, 0, 820); g.addColorStop(0, 'rgba(2,3,12,0.55)'); g.addColorStop(1, 'rgba(2,3,12,0)'); ui.fillStyle = g; ui.fillRect(0, 0, W, 820); }
+  // frame 0: the whole question is on screen and breathing; blown away on the slam
+  if (t < B.slam + 0.22) { const bl = seg(t, B.slam, 0.2); ui.save(); ui.translate(540, 480); const s0 = (1 + 0.02 * Math.sin(t * 5)) * (1 + bl * 0.5); ui.scale(s0, s0); ui.translate(-540, -480); ui.globalAlpha = 1 - bl;
+    const o = { from: 1.0 }, kick = t > B.inside ? Math.exp(-(t - B.inside) * 8) : 0;
+    line([['DOES', -1], ['YOUR', -1]], 270, 110, 5, o);
+    line([['MICROWAVE', -1, AM]], 420, 175, 5, o);
+    line([['COOK', -1], ['FROM', -1], ['THE', -1]], 570, 115, 5, o);
+    ui.save(); ui.translate(540, 710); ui.scale(1 + 0.1 * kick, 1 + 0.1 * kick); ui.translate(-540, -710); line([['INSIDE?', -1, CY]], 710, 170, 5, o); ui.restore(); ui.restore(); }
+  superAt(t, 'NO.', B.no - 0.05, B.about - B.no, 390, 260, RD);
+  superAt(t, 'ABOUT 1–1.5 INCHES', B.about - 0.05, B.l3 - B.about + 0.05, 370, 118, CY);
+  superAt(t, '≈ 2.5–4 CM DEEP', B.inch + 0.05, B.l3 - B.inch - 0.05, 510, 70, '#ffffff');
+  superAt(t, 'WATER SHAKES', B.water - 0.05, B.heat - B.water, 370, 140, '#ffffff');
+  superAt(t, '= HEAT', B.heat - 0.05, B.l4 - B.heat + 0.05, 370, 200, RD);
+  superAt(t, 'MIDDLE WARMS', B.middle - 0.05, B.spreads - B.middle, 370, 140, CY);
+  superAt(t, 'HEAT SPREADS IN', B.spreads - 0.05, B.l5 - B.spreads + 0.05, 370, 125, AM);
+  superAt(t, 'STIR', B.stir - 0.05, B.let - B.stir, 370, 220, CY);
+  superAt(t, 'LET IT STAND', B.let - 0.05, B.l6 - B.let + 0.05, 370, 140, AM);
+  if (t > B.cooks - 0.05 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) }; line([['COOKS', B.cooks - 0.05], ['OUTSIDE.', B.outside - 0.05, RD]], 350, 135, t, o); line([['MIDDLE', B.middle2 - 0.05], ['GETS', B.gets - 0.05], ['LEFTOVERS.', B.leftovers - 0.05, CY]], 510, 105, t, o); }
+  const fa = (t > 0.4 && t < B.sig) ? clamp((t - 0.4) / 0.3) * (1 - seg(t, B.sig - 0.2, 0.2)) : 0; if (fa > 0) { ui.save(); ui.globalAlpha = 0.5 * fa; ui.fillStyle = '#02030c'; ui.beginPath(); ui.roundRect(110, 1468, 860, 54, 27); ui.fill(); ui.restore(); } foot('Simplified model · illustrative, not to scale · Sources: FDA, USDA', fa * 1.25, 1505);
+}
+
+// ---------- 2D overlay drawn from 3D: thick waves + 1-inch bracket ----------
+const _v = new THREE.Vector3();
+function proj(x, y) { _v.set(x, y, 0.02); bowl.localToWorld(_v); _v.project(cam); return [(_v.x + 1) / 2 * W, (1 - _v.y) / 2 * H]; }
+function drawWaves(t) { const a = window.__wa || 0; bowl.updateMatrixWorld(); cam.updateMatrixWorld();
+  if (a > 0.01) { ui.save(); ui.lineCap = 'round'; ui.lineJoin = 'round';
+    for (const [side, h] of [[-1, 0.1], [-1, 0.28], [1, 0.1], [1, 0.28], [0, -0.13], [0, 0.13]]) { const pts = []; const N = 60;
+      for (let i = 0; i < N; i++) { const u = i / (N - 1); let x, y, depth; if (side) { const yl = h; const edge = rw(yl); x = lerp(side * 0.95, side * (edge - P), u); y = F0 + yl + 0.02 * Math.sin(Math.abs(x) * 40 - t * 16); depth = edge - Math.abs(x); }
+        else { const yTop = F0 + FH; y = lerp(yTop + 0.55, yTop - P, u); x = h + 0.02 * Math.sin(y * 40 - t * 16); depth = yTop - y; } pts.push([...proj(x, y), depth < 0 ? 1 : clamp(1 - depth / P)]); }
+      for (let i = 1; i < pts.length; i++) { ui.globalAlpha = a * 0.85 * pts[i][2]; ui.strokeStyle = PU; ui.shadowColor = PU; ui.shadowBlur = 18; ui.lineWidth = 9; ui.beginPath(); ui.moveTo(pts[i - 1][0], pts[i - 1][1]); ui.lineTo(pts[i][0], pts[i][1]); ui.stroke(); } }
+    ui.restore(); }
+  const ba = Math.max(eio(seg(t, B.about - 0.1, 0.3)) * (1 - seg(t, B.l3 + 0.3, 0.3)), 0); if (ba > 0.01) { const y = F0 + FH * 0.62; const e = rw(FH * 0.62); const [x1, y1] = proj(e, y), [x2, y2] = proj(e - P * 1.05, y);
+    ui.save(); ui.globalAlpha = ba; ui.strokeStyle = CY; ui.shadowColor = CY; ui.shadowBlur = 16; ui.lineWidth = 7; ui.beginPath(); ui.moveTo(x1, y1); ui.lineTo(x2, y2); ui.moveTo(x1, y1 - 26); ui.lineTo(x1, y1 + 26); ui.moveTo(x2, y2 - 26); ui.lineTo(x2, y2 + 26); ui.stroke();
+    ui.font = '700 54px Poppins'; ui.textAlign = 'center'; ui.fillStyle = '#ffffff'; ui.shadowColor = 'rgba(0,0,0,0.9)'; ui.shadowBlur = 14; ui.fillText('1–1.5 IN', (x1 + x2) / 2, y1 - 44); ui.restore(); } }
+
+// ---------- sound cue sheet (clean tonal only) ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  ev(0.05, 'pop', 1.0); ev(0.12, 'swish', 0.8); ev(B.micro, 'tick', 0.8); ev(B.inside, 'pop2', 1.0); ev(B.slam, 'slam', 1.2); ev(B.slam, 'whoosh', 1);
+  ev(B.no - 0.05, 'slam', 0.8); ev(B.about - 0.05, 'super', 0.9); ev(B.inch + 0.05, 'ping', 0.6);
+  ev(B.l3 + 0.1, 'whoosh'); ev(B.water - 0.05, 'pop', 0.8); ev(B.shake, 'click', 0.7); ev(B.heat - 0.05, 'slam', 0.7);
+  ev(B.l4 + 0.1, 'whoosh'); ev(B.middle - 0.05, 'pop2', 0.8); ev(B.spreads - 0.05, 'swish', 0.9); ev(B.inward, 'ping', 0.6);
+  ev(B.l5 + 0.1, 'whoosh'); ev(B.stir - 0.05, 'super', 0.9); ev(B.let - 0.05, 'card', 0.8); ev(B.stand, 'ping', 0.6);
+  ev(B.l6 + 0.1, 'whoosh', 0.9); ev(B.outside - 0.05, 'pop2'); ev(B.middle2 - 0.05, 'pop', 0.7); ev(B.leftovers - 0.05, 'slam', 0.7); ev(B.leftovers + 0.05, 'ping', 0.6);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.slam, B.no] }); props(t);
+  bloom.strength = 0.6 + (t > B.slam ? 0.45 * Math.exp(-(t - B.slam) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawWaves(t); drawType(t); signature(t, '', RD); note('Illustrative model · sources: FDA, USDA', clamp((t - B.sig - 0.38) / 0.18), 1440); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>
