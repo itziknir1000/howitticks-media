@@ -1,0 +1,205 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// Onion mist. One visual thread: the cyan mist that bursts from the knife's cut line in an x-ray onion
+// (frame 0: a dull blade already sprays it at YOU → slow-mo jet, "up to 40 m/s" → torn cells release the vapour, eyes tear →
+//  dull/fast cuts spray more → sharp, slow cut: a wisp. Same onion, less mist in your face.)
+import { makeToon } from './toon.js';
+import { THREE, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex, note } from './common.js';
+import { B, installTimeline, stage, glowSprite, camAt, line, superAt, foot, counter, signature, sigEvents, filmLook, eventsHelper, CY, RD, AM, PU } from './hit.js';
+
+bloom.threshold = 0.8; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.55; key.castShadow = false;
+stage();
+const OX = 0.12, OR = 0.27, OY = 0.6 + OR * 0.95; // onion centre (sits on the board)
+const MIST = '#9fefff';
+
+// ---------- YOU ----------
+const guy = makeToon({ skin: '#f2c29b', hair: '#2b1d16', shirt: '#3a6df0', pants: '#1f2547', shoes: '#c94a3a', hairStyle: 'cap' });
+guy.root.position.set(0.1, 0, -0.85); guy.root.rotation.y = 0.0; guy.root.scale.setScalar(0.95); scene.add(guy.root);
+
+// ---------- counter + board ----------
+const counterM = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.58, 1.2), new THREE.MeshStandardMaterial({ color: '#0d1340', roughness: 0.8, emissive: '#05081f', emissiveIntensity: 0.6 })); counterM.position.set(OX + 0.1, 0.29, -0.1); scene.add(counterM);
+const board = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.03, 0.6), new THREE.MeshStandardMaterial({ color: '#2a2f7a', roughness: 0.6, emissive: '#151a5a', emissiveIntensity: 0.5 })); board.position.set(OX, 0.595, 0.02); scene.add(board);
+const boardEdge = new THREE.LineSegments(new THREE.EdgesGeometry(board.geometry), new THREE.LineBasicMaterial({ color: CY, transparent: true, opacity: 0.45, toneMapped: false })); boardEdge.position.copy(board.position); scene.add(boardEdge);
+
+// ---------- x-ray onion: translucent shells + a glowing cross-section slice at z = 0 ----------
+const onion = new THREE.Group(); onion.position.set(OX, OY, 0.12); scene.add(onion);
+const shellM = new THREE.MeshPhysicalMaterial({ color: '#b48cff', transparent: true, opacity: 0.22, roughness: 0.3, emissive: '#3a1f9a', emissiveIntensity: 0.55, depthWrite: false, side: THREE.DoubleSide });
+const shell = new THREE.Mesh(new THREE.SphereGeometry(OR, 48, 32), shellM); shell.scale.set(1, 0.95, 1); onion.add(shell);
+const tip = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.14, 20), shellM); tip.position.y = OR * 0.95 + 0.05; onion.add(tip);
+const ST = 512; const sliceT = canvasTex(ST, ST);
+const slice = new THREE.Mesh(new THREE.CircleGeometry(OR * 1.0, 64), new THREE.MeshBasicMaterial({ map: sliceT.tex, transparent: true, toneMapped: false, side: THREE.DoubleSide, depthWrite: false }));
+slice.scale.set(1, 0.95, 1); slice.position.z = 0.002; onion.add(slice);
+const sliceRim = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 96 }, (_, i) => new THREE.Vector3(Math.cos(i / 96 * 7 * 0.8976) * OR, Math.sin(i / 96 * 7 * 0.8976) * OR * 0.95, 0.004))), new THREE.LineBasicMaterial({ color: CY, transparent: true, opacity: 0.85, toneMapped: false })); onion.add(sliceRim);
+
+// ---------- knife (blade in the y–z plane, cutting down through the slice at x = CUTX) ----------
+const CUTX = 0.06; // in onion-local units
+const knife = new THREE.Group(); scene.add(knife);
+const bladeShape = new THREE.Shape(); bladeShape.moveTo(-0.5, 0); bladeShape.lineTo(0.42, 0); bladeShape.quadraticCurveTo(0.56, 0.02, 0.6, 0.19); bladeShape.lineTo(-0.5, 0.21); bladeShape.closePath();
+const bladeM = new THREE.MeshPhysicalMaterial({ color: '#dfe6ff', metalness: 0.6, roughness: 0.25, transparent: true, opacity: 0.8, emissive: '#2a3a90', emissiveIntensity: 0.5, depthWrite: false, side: THREE.DoubleSide });
+const blade = new THREE.Mesh(new THREE.ExtrudeGeometry(bladeShape, { depth: 0.01, bevelEnabled: false }), bladeM); blade.position.z = -0.005; knife.add(blade); const bladeOut = new THREE.LineSegments(new THREE.EdgesGeometry(blade.geometry), new THREE.LineBasicMaterial({ color: '#c8d4ff', transparent: true, opacity: 0.9, toneMapped: false })); bladeOut.position.z = -0.005; knife.add(bladeOut);
+const edgeM = new THREE.LineBasicMaterial({ color: RD, transparent: true, opacity: 1, toneMapped: false });
+const edge = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-0.5, 0, 0.012), new THREE.Vector3(0.42, 0, 0.012), new THREE.Vector3(0.6, 0.19, 0.012)]), edgeM); knife.add(edge);
+const edgeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.92, 10), new THREE.MeshBasicMaterial({ color: RD, toneMapped: false })); edgeTube.rotation.z = Math.PI / 2; edgeTube.position.set(-0.04, 0.0, 0.005); knife.add(edgeTube);
+const handle = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.09, 0.05), new THREE.MeshStandardMaterial({ color: '#1b1f55', roughness: 0.5, emissive: '#3a1f9a', emissiveIntensity: 0.6 })); handle.position.set(-0.7, 0.12, 0.005); knife.add(handle);
+knife.rotation.y = -Math.PI / 2 + 0.45; knife.scale.setScalar(0.72); // blade runs front-to-back, turned toward camera so we see its face
+
+// cut schedule: [t0, duration, kind] where kind sets bluntness 1 = dull, 0 = sharp
+let CUTS = [];
+function knifeState(t) { // returns { d: depth 0 (above) → 1 (through), dull, active }
+  let best = { d: 0, dull: 1, k: null, w: 0 };
+  for (const c of CUTS) { const [t0, du, dull] = c; const down = seg(t, t0, du), up = seg(t, t0 + du + 0.05, 0.3); if (t > t0 - 0.35 && t < t0 + du + 0.45) { const w = eio(seg(t, t0 - 0.35, 0.25)) * (1 - eio(seg(t, t0 + du + 0.2, 0.25))); best = { d: eio(down) * (1 - eo(up)), dull, k: c, u: down, w }; } }
+  return best; }
+const dullAt = t => t < B.sharp - 0.12 ? 1 : 0;
+
+// ---------- mist particles: bursts from the cut line, rising toward YOU's face ----------
+const NP = 320; const P = []; const _face = new THREE.Vector3();
+for (let k = 0; k < NP; k++) { const s = glowSprite('rgba(159,239,255,1)', 0.05, 0); scene.add(s); let q = k * 7 + 1; const R = () => { const v = Math.sin(q++ * 12.9898 + k * 78.233) * 43758.5453; return v - Math.floor(v); }; s.userData = { a: R(), b: R(), c: R(), d: R(), e: R() }; P.push(s); }
+const VAP = []; for (let k = 0; k < 18; k++) { const s = glowSprite('rgba(255,181,71,1)', 0.09, 0); scene.add(s); s.userData = { j: k / 18 }; VAP.push(s); }
+const TEAR = []; for (let k = 0; k < 6; k++) { const s = glowSprite('rgba(124,200,255,1)', 0.05, 0); scene.add(s); s.userData = { side: k % 2, ph: k * 0.37 }; TEAR.push(s); }
+// bursts: [time, strength 0..1, speed]
+let BURSTS = [];
+function cutTop() { return new THREE.Vector3(OX + CUTX, OY + OR * 0.93, 0.12); }
+function faceW() { guy.root.updateMatrixWorld(true); const a = guy.lids[0].getWorldPosition(new THREE.Vector3()), b = guy.lids[1].getWorldPosition(new THREE.Vector3()); return _face.copy(a).add(b).multiplyScalar(0.5); }
+function mist(t) {
+  const F = faceW().clone(), O = cutTop();
+  P.forEach((s, i) => { const d = s.userData; s.material.opacity = 0; s.visible = false; d.on = 0;
+    for (let bI = BURSTS.length - 1; bI >= 0; bI--) { const [tb, str, spd] = BURSTS[bI]; if (d.a > str) continue; const te = tb + d.b * 0.35; const age = t - te; if (age < 0 || age > 1.9) continue;
+      const v = (0.85 + 0.75 * d.c) * spd; const rise = v * (1 - Math.exp(-age * 3.2)) / 3.2; const sp = (d.d - 0.5) * 0.7, sz = (d.e - 0.5) * 0.35;
+      const p = new THREE.Vector3(O.x + sp * rise * 0.6, O.y + rise, O.z + sz * rise * 0.8);
+      const pull = eio(clamp((age - 0.15) / 1.1)) * 0.68; const tgt = F.clone().add(new THREE.Vector3((d.d - 0.5) * 0.45, (d.c - 0.5) * 0.3 - 0.02, 0.22 + (d.e - 0.5) * 0.2)); p.lerp(tgt, pull);
+      s.position.copy(p); s.visible = false; s.userData.op = s.userData.on = 1; s.material.opacity = 0.8 * Math.min(1, age * 12) * (1 - seg(age, 0.8, 0.5)) * (1 - 0.5 * pull); s.scale.setScalar(0.045 + 0.035 * d.c + 0.03 * clamp(age)); break; } });
+  // vapour (L3): amber glow drifting from the torn cells into the eyes
+  const va = clamp(seg(t, B.vapour - 0.15, 0.3)) * (1 - seg(t, B.l4 - 0.1, 0.35));
+  VAP.forEach(s => { const d = s.userData; const ph = (t * 0.55 + d.j) % 1; const p = O.clone().lerp(F, eio(ph)); p.y += Math.sin(ph * Math.PI) * 0.22; p.x += 0.04 * Math.sin(t * 3 + d.j * 9); s.position.copy(p); s.material.opacity = 0.75 * va * Math.sin(ph * Math.PI); s.visible = false; });
+  // tears
+  const ta = clamp(seg(t, B.tears - 0.2, 0.25)) * (1 - seg(t, B.l5 + 0.4, 0.4));
+  TEAR.forEach(s => { const d = s.userData; const e = guy.lids[d.side].getWorldPosition(new THREE.Vector3()); const ph = (t * 0.9 + d.ph) % 1; s.position.set(e.x + 0.01, e.y - 0.03 - ph * 0.16, e.z + 0.03); s.material.opacity = 0.95 * ta * (1 - ph); s.visible = false; });
+}
+
+// ---------- slice texture: rings + cells, torn along the cut line ----------
+const ringsR = [0.98, 0.84, 0.7, 0.56, 0.42, 0.28, 0.15];
+function drawSlice(t, ks) { const x = sliceT.tex.image.getContext('2d'); x.clearRect(0, 0, ST, ST); const c = ST / 2, R = ST / 2;
+  x.save(); x.beginPath(); x.arc(c, c, R - 1, 0, 7); x.clip();
+  const g = x.createRadialGradient(c, c, 0, c, c, R); g.addColorStop(0, 'rgba(70,40,160,0.55)'); g.addColorStop(1, 'rgba(40,24,120,0.35)'); x.fillStyle = g; x.fillRect(0, 0, ST, ST);
+  // cells (hex lattice)
+  const cs = 15; x.lineWidth = 1.2;
+  for (let row = 0; row * cs * 0.87 < ST; row++) for (let col = 0; col * cs < ST; col++) { const px = col * cs + (row % 2) * cs / 2, py = row * cs * 0.87; const r = Math.hypot(px - c, py - c) / R; if (r > 0.99) continue;
+    const dx = Math.abs(px - (c + CUTX / OR * R)); const depthY = (1 - ks.d * 2.1) * R + c - R * 0.0; const cut = py < c + R * (2 * ks.d - 1) * 1.05 + 4;
+    const near = dx < 24 && (py < c - R + ks.d * 2.1 * R);
+    const emph = near ? 1 : 0; x.strokeStyle = emph ? `rgba(255,140,90,${0.9})` : 'rgba(190,170,255,0.22)'; x.beginPath(); for (let k = 0; k < 6; k++) { const an = Math.PI / 6 + k * Math.PI / 3; x.lineTo(px + Math.cos(an) * cs * 0.55, py + Math.sin(an) * cs * 0.55); } x.closePath(); x.stroke();
+    if (emph) { x.fillStyle = `rgba(255,181,71,${0.35 + 0.25 * Math.sin(t * 10 + px)})`; x.fill(); } }
+  // rings
+  ringsR.forEach((rr, i) => { x.strokeStyle = i ? 'rgba(235,225,255,0.75)' : 'rgba(62,230,255,0.9)'; x.lineWidth = i ? 4 : 6; x.beginPath(); x.arc(c, c + (1 - rr) * R * 0.12, rr * R, 0, 7); x.stroke(); });
+  // the cut line (open wound through the layers)
+  const cxp = c + CUTX / OR * R, yEnd = c - R + ks.d * 2.1 * R; if (ks.d > 0.01) { x.strokeStyle = RD; x.shadowColor = RD; x.shadowBlur = 18; x.lineWidth = 6; x.beginPath(); x.moveTo(cxp, 0); x.lineTo(cxp, Math.min(ST, yEnd)); x.stroke(); x.shadowBlur = 0; }
+  x.restore(); sliceT.tex.needsUpdate = true; }
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  dull: wt(0, 'dull'), knife: wt(0, 'knife'), sprays: wt(0, 'sprays'), mist: wt(0, 'mist'), face: wt(0, 'face'),
+  l2: L[1].start, cut: wt(1, 'cut'), fires: wt(1, 'fire'), drop: wt(1, 'droplets'), upto: wt(1, 'up'), forty: wt(1, 'forty'), sec: wt(1, 'second'),
+  l3: L[2].start, torn: wt(2, 'torn'), cells: wt(2, 'cells'), vapour: wt(2, 'vapour'), eyes: wt(2, 'eyes'), tears: wt(2, 'tears'),
+  l4: L[3].start, dull2: wt(3, 'dull'), fast: wt(3, 'fast'), spray: wt(3, 'spray'), more: wt(3, 'more'), faster: wt(3, 'energy'),
+  l5: L[4].start, sharp: wt(4, 'sharp'), slow: wt(4, 'slow'), same: wt(4, 'same'), far: wt(4, 'far'), less: wt(4, 'less'), face2: wt(4, 'spray'),
+  slam: L[0].end + 0.06,
+}), () => { build(); });
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+let CK = [];
+function build() {
+  CUTS = [[-0.25, 0.75, 1], [B.cut - 0.12, 0.55, 1], [B.torn - 0.1, 0.6, 1], [B.dull2 - 0.15, 0.4, 1], [B.fast - 0.08, 0.22, 1], [B.spray - 0.15, 0.3, 1], [B.slow - 0.05, 1.5, 0]];
+  BURSTS = [[-0.4, 1.0, 1.0], [0.25, 0.8, 1.0], [B.cut, 0.95, 1.2], [B.torn, 0.6, 0.8], [B.dull2 + 0.05, 1.0, 1.25], [B.fast, 1.0, 1.4], [B.spray, 1.0, 1.35], [B.slow + 0.4, 0.12, 0.45]];
+  const F0 = [0.12, 1.3, 0], CL = [OX + 0.05, 0.9, 0.12], EY = [0.1, 1.48, -0.6];
+  CK = [
+    [-0.2, [0.32, 1.42, 3.0], F0],
+    [B.face, [0.28, 1.42, 2.85], F0],
+    [B.slam - 0.05, [0.26, 1.42, 2.8], F0],
+    [B.slam + 0.45, [0.36, 1.2, 2.2], [0.14, 1.12, 0], 'whip'],
+    [B.l3 - 0.1, [0.38, 1.18, 2.1], [0.15, 1.1, 0]],
+    [B.l3 + 0.45, [OX + 0.14, 1.05, 1.65], [OX + 0.04, 0.98, 0.12], 'whip'],
+    [B.vapour, [OX + 0.1, 1.12, 1.75], [OX + 0.02, 1.08, 0.12]],
+    [B.eyes + 0.1, [0.16, 1.72, 0.55], EY, 'whip'],
+    [B.l4 - 0.1, [0.14, 1.72, 0.45], EY],
+    [B.l4 + 0.4, [0.3, 1.42, 2.75], F0, 'whip'],
+    [B.l5 - 0.1, [0.32, 1.42, 2.7], F0],
+    [B.l5 + 0.4, [0.34, 1.2, 2.2], [0.14, 1.12, 0], 'whip'],
+    [B.less, [0.3, 1.4, 2.5], F0],
+    [B.sig - 0.05, [0.26, 1.42, 2.7], F0],
+    [B.sig + 0.5, [0.26, 1.18, 1.9], F0, 'whip'],
+    [B.end + 1, [0.26, 1.18, 1.85], F0],
+  ]; }
+
+// ---------- state ----------
+function props(t) {
+  const ks = knifeState(t); const dull = dullAt(t);
+  const yTop = OY + OR * 0.95 + 0.04, yBot = 0.615; knife.position.set(lerp(OX + 0.55, OX + CUTX, ks.w), lerp(yBot, lerp(yTop + 0.05, yBot, ks.d), ks.w), 0.12);
+  // blunt = thick red edge, sharp = thin cyan edge
+  edgeTube.scale.set(lerp(0.35, 1.6, dull), 1, lerp(0.35, 1.6, dull)); edgeTube.material.color.set(dull > 0.5 ? RD : CY); edgeM.color.set(dull > 0.5 ? RD : CY);
+  bladeM.emissive.set(dull > 0.5 ? '#3a1530' : '#164a6a');
+  drawSlice(t, ks); knife.visible = !(t > B.eyes - 0.05 && t < B.l4 + 0.25);
+  onion.rotation.y = 0.04 * Math.sin(t * 0.8); onion.position.y = OY - (ks.d > 0.05 && ks.d < 0.95 ? 0.006 : 0);
+  sliceRim.material.opacity = 0.6 + 0.3 * Math.sin(t * 2);
+  mist(t);
+  // YOU
+  const mood = t < B.slam ? 'surprised' : (t > B.vapour && t < B.l5) ? 'worried' : t > B.same ? 'happy' : 'neutral';
+  const pose = t < B.slam ? 'surprised' : t > B.less ? 'point' : (t > B.l2 && t < B.l3) ? 'explain' : (t > B.l4 && t < B.l5) ? 'shrug' : 'idle';
+  guy.update(t, { pose, mood, headTurn: 0 });
+}
+
+
+// ---------- 2D droplets / vapour / tears drawn over the 3D (crisp at phone size) ----------
+const _p = new THREE.Vector3(); const scr = v => { _p.copy(v).project(cam); return [(_p.x + 1) / 2 * W, (1 - _p.y) / 2 * H, _p.z]; };
+function drawDots(t) { cam.updateMatrixWorld(); ui.save();
+  P.forEach(s => { const d = s.userData; if (!d.on) return; const a = s.material.opacity; if (a < 0.02) return; const [x, y, z] = scr(s.position); if (z > 1) return; const r = 6 + 7 * d.c;
+    ui.globalAlpha = a; ui.shadowColor = CY; ui.shadowBlur = 16; ui.fillStyle = '#7ff3ff'; ui.beginPath(); ui.arc(x, y, r, 0, 7); ui.fill(); ui.shadowBlur = 0; ui.fillStyle = '#e8fdff'; ui.beginPath(); ui.arc(x - r * 0.3, y - r * 0.3, r * 0.35, 0, 7); ui.fill(); });
+  VAP.forEach(s => { const a = s.material.opacity; if (a < 0.02) return; const [x, y] = scr(s.position); ui.globalAlpha = a * 0.8; const g = ui.createRadialGradient(x, y, 0, x, y, 46); g.addColorStop(0, 'rgba(255,181,71,0.95)'); g.addColorStop(1, 'rgba(255,181,71,0)'); ui.fillStyle = g; ui.beginPath(); ui.arc(x, y, 46, 0, 7); ui.fill(); });
+  TEAR.forEach(s => { const a = s.material.opacity; if (a < 0.02) return; const [x, y] = scr(s.position); const r = 24; ui.globalAlpha = a; ui.shadowColor = '#7CC8FF'; ui.shadowBlur = 18; ui.fillStyle = '#9fd6ff'; ui.beginPath(); ui.moveTo(x, y - r * 1.8); ui.quadraticCurveTo(x + r, y - r * 0.2, x, y + r); ui.quadraticCurveTo(x - r, y - r * 0.2, x, y - r * 1.8); ui.fill(); });
+  ui.restore(); }
+
+// ---------- type ----------
+function drawType(t) {
+  { const g = ui.createLinearGradient(0, 0, 0, 820); g.addColorStop(0, 'rgba(2,3,12,0.6)'); g.addColorStop(1, 'rgba(2,3,12,0)'); ui.fillStyle = g; ui.fillRect(0, 0, W, 820); }
+  if (t < B.slam + 0.22) { const bl = seg(t, B.slam, 0.2); ui.save(); ui.translate(540, 480); const s0 = (1 + 0.02 * Math.sin(t * 5)) * (1 + bl * 0.5); ui.scale(s0, s0); ui.translate(-540, -480); ui.globalAlpha = 1 - bl;
+    const o = { from: 1.0 }, kick = t > B.face ? Math.exp(-(t - B.face) * 8) : 0;
+    line([['A', -1], ['DULL', -1, RD], ['KNIFE', -1], ['SPRAYS', -1]], 330, 120, 5, o);
+    line([['MORE', -1, CY], ['ONION', -1], ['MIST', -1, CY]], 490, 130, 5, o);
+    ui.save(); ui.translate(540, 650); ui.scale(1 + 0.12 * kick, 1 + 0.12 * kick); ui.translate(-540, -650); line([['TOWARD', -1], ['YOUR', -1], ['FACE.', -1, CY]], 650, 130, 5, o); ui.restore(); ui.restore(); }
+  // L2: the speed
+  superAt(t, 'ONE CUT CAN', B.l2 - 0.05, B.upto - B.l2, 300, 150, '#ffffff');
+  if (t > B.upto - 0.1 && t < B.l3 + 0.05) { const a = clamp((B.l3 + 0.05 - t) / 0.15); ui.save(); ui.globalAlpha = a; line([['UP TO', B.upto - 0.05, '#ffffff']], 265, 80, t, { a }); ui.restore(); }
+  counter(t, B.forty, B.l3 + 0.05, 40, 'm/s', 410, CY);
+  // L3: chemistry → tears
+  superAt(t, 'TORN CELLS', B.torn - 0.05, B.vapour - B.torn, 300, 150, AM);
+  superAt(t, 'VAPOUR', B.vapour - 0.05, B.tears - B.vapour, 300, 190, AM);
+  superAt(t, 'TEARS', B.tears - 0.05, B.l4 - B.tears + 0.05, 300, 210, '#7CC8FF');
+  // L4: dull or fast
+  if (t > B.dull2 - 0.05 && t < B.spray - 0.02) { const o = { a: clamp((B.spray - 0.02 - t) / 0.12) }; line([['DULL', B.dull2 - 0.05, RD], ['OR', B.dull2 + 0.12], ['FAST', B.fast - 0.05, RD]], 300, 170, t, o); }
+  superAt(t, 'MORE SPRAY', B.spray - 0.05, B.faster - B.spray, 300, 160, CY);
+  superAt(t, 'MORE ENERGY', B.faster - 0.05, B.l5 - B.faster + 0.05, 300, 160, RD);
+  // L5: the fix, mirrored
+  if (t > B.sharp - 0.05 && t < B.same - 0.02) { const o = { a: clamp((B.same - 0.02 - t) / 0.12) }; line([['SHARP KNIFE.', B.sharp - 0.05, CY]], 290, 120, t, o); line([['SLOW CUT.', B.slow - 0.05, '#ffffff']], 430, 120, t, o); }
+  if (t > B.same - 0.05 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) }; line([['SAME ONION.', B.same - 0.05]], 280, 110, t, o); line([['FAR', B.far - 0.05, '#ffffff'], ['LESS', B.less - 0.05, CY]], 420, 150, t, o); line([['SPRAY.', B.face2 - 0.05, CY]], 570, 150, t, o); }
+  const fa = (t > 0.4 && t < B.sig) ? clamp((t - 0.4) / 0.3) * (1 - seg(t, B.sig - 0.2, 0.2)) : 0; if (fa > 0) { ui.save(); ui.globalAlpha = 0.5 * fa; ui.fillStyle = '#02030c'; ui.beginPath(); ui.roundRect(60, 1462, 960, 62, 31); ui.fill(); ui.restore(); }
+  foot('Illustrative model · Source: Cornell University, PNAS (2025)', fa * 1.25, 1505);
+}
+
+// ---------- sound cue sheet (clean tonal only) ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  ev(0.05, 'swish', 0.9); ev(0.3, 'pop', 0.8); ev(B.dull, 'tick', 0.7); ev(B.mist, 'pop2', 0.8); ev(B.face, 'pop2', 1.0); ev(B.slam, 'slam', 1.2); ev(B.slam, 'whoosh', 1);
+  ev(B.cut - 0.05, 'click', 0.9); ev(B.fires, 'swish', 0.9); ev(B.upto - 0.05, 'super', 0.8); ev(B.forty, 'ping', 0.8); ev(B.forty + 0.35, 'slam', 0.8);
+  ev(B.l3 + 0.1, 'whoosh'); ev(B.torn - 0.05, 'pop', 0.8); ev(B.vapour - 0.05, 'super', 0.8); ev(B.eyes + 0.05, 'whoosh', 0.8); ev(B.tears - 0.05, 'ping', 0.7);
+  ev(B.l4 + 0.05, 'whoosh'); ev(B.dull2 - 0.05, 'slam', 0.9); ev(B.fast - 0.05, 'pop', 0.8); ev(B.spray - 0.05, 'swish', 0.9); ev(B.faster - 0.05, 'pop2', 0.8);
+  ev(B.l5 + 0.05, 'whoosh', 0.9); ev(B.sharp - 0.05, 'ping', 0.8); ev(B.slow - 0.05, 'card', 0.7); ev(B.same - 0.05, 'pop', 0.7); ev(B.less - 0.05, 'slam', 0.9); ev(B.face2, 'ping', 0.6);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.slam, B.forty + 0.35, B.dull2] }); props(t);
+  bloom.strength = 0.6 + (t > B.slam ? 0.45 * Math.exp(-(t - B.slam) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawDots(t); drawType(t); signature(t, '', RD); note('Illustrative model · source: Cornell University, PNAS (2025)', 1440, 0.75 * clamp((t - B.sig - 0.38) / 0.18)); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>
