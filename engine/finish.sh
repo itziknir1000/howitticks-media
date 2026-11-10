@@ -11,7 +11,7 @@ with sync_playwright() as p:
     pg.evaluate(f'setTimeline({json.dumps(j)})'); json.dump(pg.evaluate('getBeats()'), open('$o/beats.json','w')); b.close()
 PY
 python3 audio.py $o $n
-ffmpeg -v error -y -i $o/video_noaudio.mp4 -i $o/mix.wav -map 0:v -map 1:a -c:v copy -af "volume=5.1dB,alimiter=limit=0.63:attack=0.5:release=50:level=false" -ar 48000 -c:a aac -b:a 192k -shortest deliver/howitticks_$n.mp4
+ffmpeg -v error -y -i $o/video_noaudio.mp4 -i $o/mix.wav -map 0:v -map 1:a -c:v copy -af "volume=6.8dB,alimiter=limit=0.7:attack=0.5:release=50:level=false" -ar 48000 -c:a aac -b:a 192k -shortest deliver/howitticks_$n.mp4
 ffmpeg -v error -y -i deliver/howitticks_$n.mp4 -c:v libx264 -preset slow -crf 22 -pix_fmt yuv420p -profile:v high -movflags +faststart -c:a copy deliver/howitticks_${n}_ig.mp4
 ffmpeg -hide_banner -nostats -i deliver/howitticks_$n.mp4 -af ebur128=peak=true -f null - 2>&1 | grep -E "^\s+(I|Peak):"
 python3 motion_audit.py deliver/howitticks_$n.mp4

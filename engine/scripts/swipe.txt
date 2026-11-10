@@ -1,0 +1,6 @@
+Swiping apps closed saves battery? It doesn't.
+Apps you leave get frozen. They use almost no power.
+Swipe one away, and it reloads from scratch. More work.
+The real drain is apps still running, like navigation.
+Find them in Settings, then Battery.
+Swiping doesn't save battery. It makes your phone start over.
