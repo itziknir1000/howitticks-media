@@ -116,8 +116,8 @@ function drawScreen(t) { const x = SC.tex.image.getContext('2d'); x.clearRect(0,
   const chipY = SH / 2 - CHY / (PHT - 0.06) * SH, batY = SH / 2 - BTY / (PHT - 0.06) * SH;
   x.font = '700 64px Poppins'; x.textAlign = 'right'; x.fillStyle = 'rgba(255,214,150,0.95)'; x.fillText('CHIP', SW / 2 - 140, chipY + 22); x.textAlign = 'center'; x.fillStyle = 'rgba(180,220,255,0.95)'; x.fillText('BATTERY', SW / 2, batY - 150);
   const cy = SH / 2 + 30, cw = 230, ch = 400, gap = 255;
-  const listA = clamp(seg(t, B.settings - 0.15, 0.3)) * (1 - seg(t, B.l6 + 0.15, 0.3));
-  const cardsA = 1 - listA;
+  const listA = clamp(seg(t, B.settings - 0.1, 0.12)) * (1 - seg(t, B.l6 + 0.15, 0.2));
+  const cardsA = 1 - clamp(seg(t, B.settings - 0.16, 0.1)) * (1 - seg(t, B.l6 + 0.1, 0.2));
   if (cardsA > 0.01) {
     const ice = clamp(seg(t, B.frozen - 0.05, 0.4)) * (1 - seg(t, B.start - 0.15, 0.25));
     // middle card (MUSIC) is the one that gets swiped: frame 0 flick, L3 swipe + rebuild, L6 swipe + rebuild
