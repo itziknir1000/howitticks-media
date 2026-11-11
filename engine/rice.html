@@ -1,0 +1,193 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// Wet phone in rice. One visual thread: the cyan water droplets inside an x-ray phone.
+// frame 0: phone plunges into a bowl of rice, grains splash, hook on screen → tiny grains slide into the port, port turns red →
+// rice falls away, the phone is tapped port-down and drops fall out → airflow streams across, droplets evaporate out →
+// no-charge icon + 30 MIN timer → mirror: no rice, just air.
+import { makeToon } from './toon.js';
+import { THREE, RoundedBoxGeometry, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex, note } from './common.js';
+import { B, installTimeline, stage, glowSprite, camAt, line, superAt, foot, signature, sigEvents, filmLook, eventsHelper, CY, RD, AM, PU } from './hit.js';
+
+bloom.threshold = 0.8; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.55; key.castShadow = false;
+stage();
+const PX = 0.18, PY = 1.0, PWD = 0.92, PHT = 1.84, PS = 0.87;
+const glass = (op = 0.4, col = '#0d1640') => new THREE.MeshPhysicalMaterial({ color: col, metalness: 0.2, roughness: 0.25, transparent: true, opacity: op, side: THREE.DoubleSide, depthWrite: false, emissive: '#142070', emissiveIntensity: 1.0 });
+const edge = (g, col = CY, op = 0.6) => new THREE.LineSegments(new THREE.EdgesGeometry(g, 20), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: op, toneMapped: false }));
+let rs = 12345; const rnd = () => (rs = (rs * 16807) % 2147483647) / 2147483647;
+
+// ---------- YOU ----------
+const guy = makeToon({ skin: '#f2c29b', hair: '#2b1d16', shirt: '#3a6df0', pants: '#1f2547', shoes: '#c94a3a', hairStyle: 'cap' });
+guy.root.position.set(-0.68, 0, -0.25); guy.root.rotation.y = 0.55; guy.root.scale.setScalar(0.8); scene.add(guy.root);
+
+// ---------- the x-ray phone ----------
+const phone = new THREE.Group(); phone.position.set(PX, PY, 0); phone.scale.setScalar(PS); scene.add(phone);
+{ const g = new RoundedBoxGeometry(PWD, PHT, 0.08, 4, 0.08); phone.add(new THREE.Mesh(g, glass(0.38))); phone.add(edge(g, CY, 1.0)); }
+const BOT = -PHT / 2;
+// charging port (bottom edge)
+const portM = new THREE.MeshBasicMaterial({ color: '#cfe8ff', transparent: true, opacity: 0.9, toneMapped: false });
+const port = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.05, 0.05), portM); port.position.set(0, BOT + 0.03, 0); phone.add(port);
+const portGlow = glowSprite('rgba(255,59,92,1)', 0.5, 0); portGlow.position.set(0, BOT + 0.04, 0.05); phone.add(portGlow);
+// board + battery outlines (x-ray internals, dim)
+{ const g = new THREE.BoxGeometry(0.6, 0.7, 0.02); const e = edge(g, '#7f8fd8', 0.35); e.position.set(0, -0.35, -0.01); phone.add(e);
+  const g2 = new THREE.BoxGeometry(0.62, 0.5, 0.02); const e2 = edge(g2, '#7f8fd8', 0.35); e2.position.set(0, 0.45, -0.01); phone.add(e2); }
+// water droplets inside (the thread)
+const ND = 22, DROPS = [];
+for (let i = 0; i < ND; i++) { const s = glowSprite('rgba(62,230,255,1)', 0.1, 0.9); const d = { s, x: (rnd() - 0.5) * 0.7, y: BOT + 0.15 + rnd() * 1.1, ph: rnd() * 6.28, sz: 0.07 + rnd() * 0.06, out: rnd() }; phone.add(s); DROPS.push(d); }
+// drops falling out of the port on the taps
+const FALL = []; for (let i = 0; i < 10; i++) { const s = glowSprite('rgba(62,230,255,1)', 0.09, 0); scene.add(s); FALL.push({ s, k: i }); }
+
+// ---------- bowl of rice ----------
+const bowl = new THREE.Group(); bowl.position.set(PX, 0, 0); scene.add(bowl);
+const bowlPts = []; for (let i = 0; i <= 12; i++) { const a = i / 12; bowlPts.push(new THREE.Vector2(0.25 + 0.75 * Math.sin(a * Math.PI / 2), 0.02 + 0.55 * (1 - Math.cos(a * Math.PI / 2)))); }
+const bowlG = new THREE.LatheGeometry(bowlPts, 40); const bowlM = glass(0.22, '#13235e'); bowl.add(new THREE.Mesh(bowlG, bowlM)); const bowlE = edge(bowlG, PU, 0.35); bowl.add(bowlE);
+const NR = 280, grainG = new THREE.CapsuleGeometry(0.018, 0.045, 3, 6), grainM = new THREE.MeshStandardMaterial({ color: '#6f7590', emissive: '#1c2140', emissiveIntensity: 0.4, roughness: 0.6, transparent: true });
+const rice = new THREE.InstancedMesh(grainG, grainM, NR); scene.add(rice);
+const GR = []; for (let i = 0; i < NR; i++) { let x, z, r; do { x = (rnd() - 0.5) * 1.9; z = (rnd() - 0.5) * 1.9; r = Math.hypot(x, z); } while (r > 0.95);
+  const y = 0.05 + 0.5 * (1 - Math.cos(Math.min(1, r / 0.97) * Math.PI / 2)) + rnd() * (0.62 - 0.5 * (1 - Math.cos(Math.min(1, r / 0.97) * Math.PI / 2)));
+  GR.push({ p: new THREE.Vector3(PX + x, Math.min(y, 0.62), z), q: new THREE.Euler(rnd() * 6, rnd() * 6, rnd() * 6), v: new THREE.Vector3((rnd() - 0.5) * 1.2, 1.2 + rnd() * 1.6, (rnd() - 0.5) * 0.8), splash: r < 0.5 && rnd() < 0.35, d: rnd() }); }
+// grains that creep into the port (amber highlighted)
+const NI = 7, INS = []; for (let i = 0; i < NI; i++) { const m = new THREE.Mesh(grainG, new THREE.MeshBasicMaterial({ color: AM, toneMapped: false, transparent: true })); m.scale.setScalar(1.6); scene.add(m); INS.push({ m, x0: PX + (i - 3) * 0.12, z0: -0.12 - (i % 2) * 0.05, k: i / NI }); }
+
+// ---------- airflow ----------
+const NA = 5, AIR = [], AF = [];
+for (let j = 0; j < NA; j++) { const y = 0.45 + j * 0.3; const c = new THREE.CatmullRomCurve3([new THREE.Vector3(-1.6, y, 0.25), new THREE.Vector3(-0.4, y + 0.08, 0.3), new THREE.Vector3(PX + 0.5, y - 0.06, 0.3), new THREE.Vector3(1.8, y + 0.05, 0.2)]);
+  const m = new THREE.LineBasicMaterial({ color: CY, transparent: true, opacity: 0, toneMapped: false }); scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(c.getPoints(60)), m)); AIR.push({ c, m });
+  for (let i = 0; i < 6; i++) { const s = glowSprite('rgba(170,245,255,1)', 0.16, 0); scene.add(s); AF.push({ s, j, k: i / 6 }); } }
+
+// screen texture
+const SW = 800, SH = 1600; const SC = canvasTex(SW, SH);
+const screen = new THREE.Mesh(new THREE.PlaneGeometry(PWD - 0.06, PHT - 0.06), new THREE.MeshBasicMaterial({ map: SC.tex, transparent: true, toneMapped: false, depthWrite: false })); screen.position.z = 0.046; phone.add(screen);
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  rice1: wt(0, 'rice'), apple: wt(0, 'Apple'), dont: wt(0, 'don'),
+  l2: L[1].start, tiny: wt(1, 'Tiny'), bits: wt(1, 'bits'), damage: wt(1, 'damage'),
+  l3: L[2].start, tap: wt(2, 'tap'), gently: wt(2, 'gently'), port: wt(2, 'port'), down: wt(2, 'down'),
+  l4: L[3].start, leave: wt(3, 'leave'), dry: wt(3, 'dry'), airflow: wt(3, 'airflow'),
+  l5: L[4].start, wait: wt(4, 'wait'), thirty: wt(4, 'thirty'), minutes: wt(4, 'minutes'), charging: wt(4, 'charging'),
+  l6: L[5].start, need: wt(5, 'need'), rice6: wt(5, 'rice'), it6: wt(5, 'It'), time6: wt(5, 'time'), air: wt(5, 'air'),
+  slam: L[0].end + 0.06,
+}), () => { build(); });
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.l6, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+let CK = [];
+function build() {
+  const F0 = [PX - 0.1, 1.15, 0], LK = [PX, 0.95, 0], PORT = [PX, 0.3, 0];
+  CK = [
+    [-0.2, [PX - 0.05, 1.5, 3.6], F0],
+    [B.slam - 0.05, [PX - 0.2, 1.38, 3.35], F0],
+    [B.slam + 0.4, [PX + 0.25, 0.62, 2.0], [PX, 0.4, 0], 'whip'],
+    [B.damage + 0.3, [PX + 0.18, 0.58, 1.75], [PX, 0.38, 0]],
+    [B.l3 + 0.35, [PX - 0.25, 1.05, 3.0], [PX, 0.8, 0], 'whip'],
+    [B.l4 - 0.1, [PX - 0.15, 1.0, 2.9], [PX, 0.85, 0]],
+    [B.l4 + 0.4, [PX + 0.35, 1.1, 3.1], LK, 'whip'],
+    [B.l5 - 0.1, [PX + 0.25, 1.08, 3.0], LK],
+    [B.l5 + 0.4, [PX - 0.05, 1.12, 2.55], [PX, 1.05, 0], 'whip'],
+    [B.l6 - 0.1, [PX + 0.05, 1.12, 2.5], [PX, 1.05, 0]],
+    [B.l6 + 0.4, [PX - 0.2, 1.2, 3.7], [PX - 0.1, 1.0, 0], 'whip'],
+    [B.sig - 0.05, [PX - 0.15, 1.38, 3.3], F0],
+    [B.sig + 0.5, [PX - 0.1, 1.25, 2.4], F0, 'whip'],
+    [B.end + 1, [PX - 0.1, 1.25, 2.35], F0],
+  ]; }
+
+// ---------- screen ----------
+function drawScreen(t) { const x = SC.tex.image.getContext('2d'); x.clearRect(0, 0, SW, SH);
+  // port label
+  const pa = clamp(seg(t, B.tiny - 0.1, 0.2)) * (1 - seg(t, B.l4, 0.2));
+  if (pa > 0) { x.save(); x.globalAlpha = pa; x.font = '700 92px Poppins'; x.textAlign = 'center'; const red = t > B.damage - 0.05 && t < B.l3; x.fillStyle = red ? '#ff6b80' : '#cfeaff'; x.fillText('PORT', SW / 2, SH - 120); x.strokeStyle = x.fillStyle; x.lineWidth = 8; x.beginPath(); x.moveTo(SW / 2, SH - 100); x.lineTo(SW / 2, SH - 40); x.stroke(); x.restore(); }
+  // L5: no charging + 30 MIN timer
+  const ca = clamp(seg(t, B.l5, 0.15)) * (1 - seg(t, B.l6 + 0.1, 0.2));
+  if (ca > 0) { x.save(); x.globalAlpha = ca; const cx = SW / 2, cy = SH / 2 - 120;
+    x.fillStyle = 'rgba(10,14,48,0.9)'; x.beginPath(); x.roundRect(60, cy - 330, SW - 120, 900, 50); x.fill(); x.strokeStyle = 'rgba(62,230,255,0.7)'; x.lineWidth = 5; x.stroke();
+    // bolt
+    x.fillStyle = AM; x.beginPath(); x.moveTo(cx + 30, cy - 230); x.lineTo(cx - 90, cy + 10); x.lineTo(cx - 5, cy + 10); x.lineTo(cx - 40, cy + 200); x.lineTo(cx + 95, cy - 50); x.lineTo(cx + 5, cy - 50); x.closePath(); x.fill();
+    const sl = seg(t, B.charging - 0.4, 0.25); if (sl > 0) { x.strokeStyle = RD; x.lineWidth = 34; x.lineCap = 'round'; x.beginPath(); x.moveTo(cx - 170, cy - 220); x.lineTo(cx - 170 + 340 * eo(sl), cy - 220 + 420 * eo(sl)); x.stroke(); }
+    // timer ring + count
+    const ta = seg(t, B.thirty - 0.1, 0.2); if (ta > 0) { const rr = 120, ty = cy + 390; x.strokeStyle = 'rgba(255,255,255,0.15)'; x.lineWidth = 22; x.beginPath(); x.arc(cx, ty, rr, 0, 7); x.stroke();
+      x.strokeStyle = CY; x.beginPath(); x.arc(cx, ty, rr, -Math.PI / 2, -Math.PI / 2 + 6.283 * eo(seg(t, B.thirty - 0.1, 1.2))); x.stroke();
+      x.font = '700 110px Poppins'; x.textAlign = 'center'; x.fillStyle = '#ffffff'; x.fillText('30', cx, ty + 20); x.font = '700 44px Poppins'; x.fillStyle = CY; x.fillText('MIN', cx, ty + 70); }
+    x.restore(); }
+  const na = clamp(seg(t, B.l6 - 0.05, 0.15)) * (1 - seg(t, B.it6 - 0.05, 0.15));
+  if (na > 0) { x.save(); x.globalAlpha = na; x.translate(SW / 2, SH / 2 - 60); x.fillStyle = '#f3ead2';
+    [[-90, -40, 0.5], [40, -90, -0.4], [80, 60, 0.9], [-60, 90, -0.8], [0, 10, 0.1]].forEach(([gx, gy, r]) => { x.save(); x.translate(gx, gy); x.rotate(r); x.beginPath(); x.roundRect(-24, -62, 48, 124, 24); x.fill(); x.restore(); });
+    x.strokeStyle = RD; x.lineWidth = 30; x.lineCap = 'round'; x.beginPath(); x.arc(0, 0, 220, 0, 7); x.stroke(); x.beginPath(); x.moveTo(-155, -155); x.lineTo(155, 155); x.stroke(); x.restore(); }
+  SC.tex.needsUpdate = true; }
+
+// ---------- state ----------
+const DM = new THREE.Object3D();
+function props(t) {
+  // phone: plunges into rice at frame 0, lifts out at L3, taps
+  const drop = t < 0.4 ? -0.7 * (1 - eio(seg(t, -0.15, 0.55))) : 0;
+  const lift = eio(seg(t, B.l3 - 0.05, 0.4)) * 0.18;
+  let y = PY - 0.42 + 0.42 * 0 + (-drop) * 0 ; y = PY + 0.75 * (1 - eio(seg(t, -0.1, 0.42))) - 0.38 + 0.15 * eio(seg(t, B.l2 - 0.1, 0.4)) + 0.23 * eio(seg(t, B.l3 - 0.05, 0.4)) + lift * 0;
+  let tap = 0; [B.tap, B.gently, B.port].forEach(tt => { const u = t - tt; if (u > 0 && u < 0.25) tap += -0.03 * Math.sin(u * 40) * Math.exp(-u * 14); });
+  phone.position.y = y + tap + 0.01 * Math.sin(t * 1.3); phone.rotation.y = -0.15 + 0.05 * Math.sin(t * 0.7); phone.rotation.z = 0.04 * (1 - seg(t, B.l3, 0.4));
+  // rice: settles, splash on impact, falls away at L3
+  const impact = 0.3, gone = seg(t, B.l3 - 0.1, 0.6), rA = 1 - seg(t, B.l3 + 0.1, 0.5);
+  grainM.opacity = rA * (1 - 0.7 * seg(t, B.l2 - 0.1, 0.3)); rice.visible = rA > 0.01; bowlM.opacity = 0.22 * rA; bowlE.material.opacity = 0.35 * rA;
+  GR.forEach((g, i) => { DM.position.copy(g.p); DM.rotation.copy(g.q);
+    if (g.splash && t > impact) { const u = Math.min(t - impact, 0.9); DM.position.x += g.v.x * u * 0.5; DM.position.z += g.v.z * u * 0.3; DM.position.y = Math.max(g.p.y, g.p.y + g.v.y * u * 0.6 - 4.9 * u * u * 0.6); DM.rotation.x += u * 6; }
+    if (gone > 0) { DM.position.y -= 1.4 * gone * gone * (0.6 + g.d); DM.position.x += (g.p.x - PX) * gone * 0.8; }
+    DM.updateMatrix(); rice.setMatrixAt(i, DM.matrix); }); rice.instanceMatrix.needsUpdate = true;
+  // grains creeping into the port during L2
+  const portW = new THREE.Vector3(); port.getWorldPosition(portW);
+  INS.forEach((g, i) => { const u = eio(seg(t, B.bits - 0.1 + g.k * 0.6, 0.6)); const a = clamp(seg(t, B.tiny - 0.1, 0.2)) * (1 - seg(t, B.l3 - 0.05, 0.25)); g.m.material.opacity = a; g.m.visible = a > 0.01;
+    g.m.position.set(lerp(g.x0, portW.x + (i - 3) * 0.02, u), lerp(0.62, portW.y, u), lerp(g.z0, -0.03, u)); g.m.rotation.set(0, 0, Math.PI / 2 * u + i); });
+  const red = clamp(seg(t, B.damage - 0.1, 0.2)) * (1 - seg(t, B.l3, 0.3)); portGlow.material.opacity = 0.9 * red; portM.color.set(red > 0.3 ? '#ff6b80' : '#cfe8ff');
+  // droplets inside: present from frame 0; some fall out on taps; evaporate in airflow
+  const ev = seg(t, B.dry - 0.1, B.l5 - B.dry + 0.6);
+  DROPS.forEach((d, i) => { let dx = d.x + 0.02 * Math.sin(t * 2 + d.ph), dy = d.y + 0.02 * Math.cos(t * 1.7 + d.ph); let a = 0.95, sz = d.sz;
+    if (d.out < 0.3) { const u = eio(seg(t, B.tap + d.out * 2.5, 0.5)); dx = lerp(dx, (i % 3 - 1) * 0.05, u); dy = lerp(dy, BOT + 0.05, u); a *= 1 - seg(t, B.tap + d.out * 2.5 + 0.45, 0.1); }
+    else { const k = clamp((ev - d.out * 0.5) * 2); dx += k * 0.9; dy += k * 0.2; a *= 1 - k; sz *= 1 - 0.6 * k; }
+    if (t > B.l5 + 0.8) a = 0; d.s.position.set(dx, dy, 0.03); d.s.material.opacity = a; d.s.scale.setScalar(sz * 2.4); });
+  FALL.forEach((f, i) => { const t0 = [B.tap, B.gently, B.port][i % 3] + 0.12 + (i / 3 | 0) * 0.08; const u = t - t0; if (u < 0 || u > 0.8) { f.s.material.opacity = 0; return; }
+    f.s.position.set(portW.x + ((i % 3) - 1) * 0.04, portW.y - 0.05 - 2.2 * u * u - 0.2 * u, 0.05); f.s.material.opacity = 1 - u / 0.8; f.s.scale.setScalar(0.1); });
+  // airflow
+  const aA = clamp(seg(t, B.dry - 0.15, 0.3)) * (1 - seg(t, B.l5 + 0.2, 0.3)) + clamp(seg(t, B.air - 0.15, 0.25)) * (1 - seg(t, B.sig, 0.2));
+  AIR.forEach(a => a.m.opacity = 0.95 * aA); AF.forEach(f => { const ph = (f.k + t * 0.55 + f.j * 0.13) % 1; f.s.position.copy(AIR[f.j].c.getPoint(ph)); f.s.material.opacity = aA; f.s.scale.setScalar(0.16); });
+  guy.root.visible = t < B.l2 + 0.1 || t > B.l6 + 0.3;
+  drawScreen(t);
+  const mood = t < B.slam ? 'surprised' : t > B.l6 ? 'happy' : 'neutral';
+  const pose = t < B.slam ? 'surprised' : t > B.air ? 'point' : 'idle';
+  guy.update(t, { pose, mood, headTurn: 0 });
+}
+
+// ---------- type ----------
+function drawType(t) {
+  { const g = ui.createLinearGradient(0, 0, 0, 760); g.addColorStop(0, 'rgba(2,3,12,0.65)'); g.addColorStop(1, 'rgba(2,3,12,0)'); ui.fillStyle = g; ui.fillRect(0, 0, W, 760); }
+  if (t < B.slam + 0.22) { const bl = seg(t, B.slam, 0.2); ui.save(); ui.translate(540, 450); const s0 = (1 + 0.02 * Math.sin(t * 5)) * (1 + bl * 0.5); ui.scale(s0, s0); ui.translate(-540, -450); ui.globalAlpha = 1 - bl;
+    const o = { from: 1.0 }, kick = t > B.dont ? Math.exp(-(t - B.dont) * 8) : 0;
+    line([['WET', -1, CY], ['PHONE', -1]], 320, 150, 5, o);
+    line([['IN', -1], ['RICE?', -1, '#f3ead2']], 480, 150, 5, o);
+    ui.save(); ui.translate(540, 650); ui.scale(1 + 0.15 * kick, 1 + 0.15 * kick); ui.translate(-540, -650); line([['APPLE', -1], ['SAYS', -1], ["DON'T.", -1, RD]], 650, 125, 5, o); ui.restore(); ui.restore(); }
+  if (t > B.tiny - 0.05 && t < B.l3 + 0.02) { const o = { a: clamp((B.l3 + 0.02 - t) / 0.14) }; line([['TINY BITS', B.tiny - 0.05, AM]], 300, 140, t, o); line([['COULD', B.damage - 0.25, '#ffffff'], ['DAMAGE', B.damage - 0.05, RD]], 450, 105, t, o); }
+  if (t > B.tap - 0.05 && t < B.l4 + 0.02) { const o = { a: clamp((B.l4 + 0.02 - t) / 0.14) }; line([['TAP', B.tap - 0.05, '#ffffff'], ['GENTLY', B.gently - 0.05, CY]], 300, 140, t, o); line([['PORT', B.port - 0.05, '#ffffff'], ['DOWN', B.down - 0.05, CY]], 450, 140, t, o); }
+  if (t > B.leave - 0.05 && t < B.l5 + 0.02) { const o = { a: clamp((B.l5 + 0.02 - t) / 0.14) }; line([['DRY', B.dry - 0.05, '#ffffff'], ['PLACE', B.dry - 0.05, '#ffffff']], 300, 140, t, o); line([['+', B.airflow - 0.05, '#ffffff'], ['AIRFLOW', B.airflow - 0.05, CY]], 450, 140, t, o); }
+  if (t > B.wait - 0.05 && t < B.l6 + 0.02) { const o = { a: clamp((B.l6 + 0.02 - t) / 0.14) }; line([['WAIT', B.wait - 0.05, '#ffffff'], ['30+ MIN', B.thirty - 0.05, CY]], 300, 140, t, o); line([['BEFORE', B.charging - 0.2, '#ffffff'], ['CHARGING', B.charging - 0.2, AM]], 450, 110, t, o); }
+  if (t > B.l6 - 0.05 && t < B.it6 - 0.02) { const o = { a: clamp((B.it6 - 0.02 - t) / 0.12) }; line([['NO', B.l6 - 0.05, RD], ['RICE.', B.l6 - 0.05, '#f3ead2']], 360, 190, t, o); }
+  if (t > B.it6 - 0.05 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) }; line([['IT', B.it6 - 0.05], ['NEEDS', B.it6 - 0.05, '#ffffff']], 290, 130, t, o); line([['TIME', B.time6 - 0.05, AM], ['+', B.time6 - 0.05, '#ffffff'], ['AIR.', B.time6 - 0.05, CY]], 500, 170, t, o); }
+  const fa = (t < B.sig) ? (1 - seg(t, B.sig - 0.2, 0.2)) : 0; if (fa > 0) { ui.save(); ui.globalAlpha = 0.5 * fa; ui.fillStyle = '#02030c'; ui.beginPath(); ui.roundRect(60, 1432, 960, 62, 31); ui.fill(); ui.restore(); }
+  foot('Illustrative model · Source: Apple Support', fa * 1.25, 1475);
+}
+
+// ---------- sound cue sheet (clean tonal only) ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  ev(0.0, 'swish', 1.0); ev(0.28, 'pop', 0.9); ev(B.dont - 0.03, 'slam', 1.1); ev(B.slam, 'whoosh', 1);
+  ev(B.tiny - 0.05, 'pop2', 0.8); ev(B.bits - 0.05, 'click', 0.6); ev(B.damage - 0.05, 'slam', 0.9);
+  ev(B.l3 + 0.05, 'whoosh', 0.9); ev(B.tap, 'tick', 0.8); ev(B.gently, 'tick', 0.7); ev(B.port, 'tick', 0.7); ev(B.down - 0.05, 'pop', 0.7);
+  ev(B.l4 + 0.1, 'whoosh', 0.9); ev(B.dry - 0.05, 'swish', 0.8); ev(B.airflow - 0.05, 'ping', 0.8);
+  ev(B.l5 + 0.1, 'whoosh', 0.9); ev(B.thirty - 0.05, 'ping', 0.9); ev(B.charging - 0.05, 'pop2', 0.8);
+  ev(B.l6 - 0.05, 'card', 0.8); ev(B.it6 - 0.05, 'click', 0.7); ev(B.time6 - 0.05, 'tick', 0.7); ev(B.air - 0.05, 'slam', 1.0);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.dont, B.damage, B.air] }); props(t);
+  bloom.strength = 0.6 + (t > B.dont ? 0.4 * Math.exp(-(t - B.dont) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawType(t); signature(t, '', RD); note('Illustrative model · Source: Apple Support', 1440, 0.75 * clamp((t - B.sig - 0.38) / 0.18)); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>
