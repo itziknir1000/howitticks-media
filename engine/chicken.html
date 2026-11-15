@@ -1,0 +1,217 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>@font-face{font-family:Poppins;src:url(assets/Poppins-Bold.ttf);font-weight:700}@font-face{font-family:Poppins;src:url(assets/Poppins-Medium.ttf);font-weight:500}html,body{margin:0;background:#000;overflow:hidden}canvas{position:absolute;left:0;top:0}</style>
+<script type="importmap">{"imports":{"three":"./three/build/three.module.js","three/addons/":"./three/jsm/"}}</script>
+</head><body><canvas id="ui" width="1080" height="1920" style="z-index:2"></canvas>
+<script>window.LANG_EN = true;</script>
+<script type="module">
+// Washing raw chicken spreads germs. One visual thread: the red bacteria on an x-ray drumstick.
+// frame 0: tap water hits the drumstick, germ-carrying droplets already flying, landing on counter + salad (edges turn red) →
+// germs stay on the meat (water doesn't kill) → droplets paint the sink, counter, nearby food red →
+// sink fades, a pan rises, heat (amber) wipes the germs out, 74°C / 165°F → thermometer into the thickest part → mirror: don't wash it, cook it.
+import { makeToon } from './toon.js';
+import { THREE, RoundedBoxGeometry, W, H, clamp, lerp, eio, eo, seg, scene, cam, composer, bloom, key, ui, canvasTex, note } from './common.js';
+import { B, installTimeline, stage, glowSprite, camAt, line, foot, signature, sigEvents, filmLook, eventsHelper, CY, RD, AM, PU } from './hit.js';
+
+bloom.threshold = 0.8; bloom.strength = 0.6; bloom.radius = 0.55; key.intensity = 0.55; key.castShadow = false;
+stage();
+const PX = 0.15, CT = 0.62; // sink centre x, counter top height
+const glass = (op = 0.35, col = '#0d1640', em = '#142070') => new THREE.MeshPhysicalMaterial({ color: col, metalness: 0.2, roughness: 0.25, transparent: true, opacity: op, side: THREE.DoubleSide, depthWrite: false, emissive: em, emissiveIntensity: 1.0 });
+const edge = (g, col = CY, op = 0.6) => new THREE.LineSegments(new THREE.EdgesGeometry(g, 20), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: op, toneMapped: false }));
+let rs = 4242; const rnd = () => (rs = (rs * 16807) % 2147483647) / 2147483647;
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+// ---------- YOU ----------
+const guy = makeToon({ skin: '#f2c29b', hair: '#2b1d16', shirt: '#3a6df0', pants: '#1f2547', shoes: '#c94a3a', hairStyle: 'cap' });
+guy.root.position.set(PX + 0.42, 0, -0.85); guy.root.rotation.y = -0.45; guy.root.scale.setScalar(0.85); scene.add(guy.root);
+
+// ---------- kitchen: sink + counters + salad ----------
+const kitchen = new THREE.Group(); scene.add(kitchen); const kMats = [];
+const addK = (geo, col, op, pos, ecol, eop) => { const m = glass(op, col); const me = new THREE.Mesh(geo, m); me.position.copy(pos); kitchen.add(me); const e = edge(geo, ecol, eop); e.position.copy(pos); kitchen.add(e); kMats.push([m, op], [e.material, eop]); return e; };
+const sinkE = addK(new THREE.BoxGeometry(1.0, 0.42, 0.8), '#0f1d55', 0.22, V(PX, CT - 0.21, 0), PU, 0.75);
+const cntR = addK(new THREE.BoxGeometry(1.25, 0.06, 0.9), '#141a52', 0.45, V(PX + 0.5 + 0.625, CT - 0.03, 0), PU, 0.6);
+const cntL = addK(new THREE.BoxGeometry(1.2, 0.06, 0.9), '#141a52', 0.45, V(PX - 0.5 - 0.6, CT - 0.03, 0), PU, 0.6);
+// faucet
+const fc = new THREE.CatmullRomCurve3([V(PX - 0.05, CT, -0.36), V(PX - 0.05, 1.5, -0.36), V(PX - 0.05, 1.62, -0.18), V(PX - 0.05, 1.5, 0.0)]);
+const SPOUT = V(PX - 0.05, 1.47, 0.0);
+{ const g = new THREE.TubeGeometry(fc, 40, 0.035, 10); const m = glass(0.5, '#1a2470'); kitchen.add(new THREE.Mesh(g, m)); kMats.push([m, 0.5]);
+  const e = new THREE.Line(new THREE.BufferGeometry().setFromPoints(fc.getPoints(40)), new THREE.LineBasicMaterial({ color: CY, transparent: true, opacity: 0.8, toneMapped: false })); kitchen.add(e); kMats.push([e.material, 0.8]); }
+// salad bowl with leaves (nearby food)
+const BOWL = V(PX + 0.6, CT, 0.15);
+const bowlPts = []; for (let i = 0; i <= 10; i++) { const a = i / 10; bowlPts.push(new THREE.Vector2(0.06 + 0.15 * Math.sin(a * Math.PI / 2), 0.16 * (1 - Math.cos(a * Math.PI / 2)))); }
+const bowlG = new THREE.LatheGeometry(bowlPts, 32); const bowlM = glass(0.3, '#13235e'); const bowlMesh = new THREE.Mesh(bowlG, bowlM); bowlMesh.position.copy(BOWL); kitchen.add(bowlMesh); kMats.push([bowlM, 0.3]);
+const bowlE = edge(bowlG, PU, 0.6); bowlE.position.copy(BOWL); kitchen.add(bowlE); kMats.push([bowlE.material, 0.6]);
+const leafM = new THREE.MeshStandardMaterial({ color: '#5fd46e', emissive: '#1e6b2a', emissiveIntensity: 0.9, roughness: 0.5, transparent: true });
+const LEAVES = []; for (let i = 0; i < 9; i++) { const l = new THREE.Mesh(new THREE.SphereGeometry(0.065, 12, 8), leafM); const a = i / 9 * 6.28; l.scale.set(1, 0.35, 0.7); l.position.set(BOWL.x + Math.cos(a) * 0.08 * (i % 2 ? 1 : 0.5), BOWL.y + 0.14 + (i % 3) * 0.025, BOWL.z + Math.sin(a) * 0.08 * (i % 2 ? 1 : 0.5)); l.rotation.set(rnd(), rnd() * 6, rnd()); kitchen.add(l); LEAVES.push(l); }
+kMats.push([leafM, 1]);
+
+// ---------- the x-ray drumstick ----------
+const ck = new THREE.Group(); scene.add(ck);
+const prof = [[0, -0.33], [0.05, -0.32], [0.062, -0.29], [0.045, -0.24], [0.05, -0.17], [0.08, -0.08], [0.14, 0.01], [0.19, 0.11], [0.2, 0.18], [0.17, 0.26], [0.1, 0.31], [0, 0.33]];
+const rAt = y => { for (let i = 1; i < prof.length; i++) if (y <= prof[i][1]) { const a = prof[i - 1], b = prof[i]; return lerp(a[0], b[0], (y - a[1]) / (b[1] - a[1])); } return 0; };
+const ckG = new THREE.LatheGeometry(prof.map(p => new THREE.Vector2(p[0], p[1])), 40);
+const ckM = glass(0.55, '#ff8fa8', '#4a1024'); ckM.metalness = 0; ckM.roughness = 0.65; ck.add(new THREE.Mesh(ckG, ckM));
+const ckE = edge(ckG, '#ffb3c4', 0.35); ck.add(ckE);
+{ const bm = new THREE.MeshBasicMaterial({ color: '#e9ecff', transparent: true, opacity: 0.85, toneMapped: false });
+  const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.5, 10), bm); bone.position.y = -0.1; ck.add(bone);
+  const k1 = new THREE.Mesh(new THREE.SphereGeometry(0.042, 12, 10), bm); k1.position.y = -0.36; ck.add(k1);
+  const k2 = new THREE.Mesh(new THREE.SphereGeometry(0.032, 12, 10), bm); k2.position.y = 0.15; ck.add(k2); }
+// bacteria on the meat (the thread)
+const germG = new THREE.CapsuleGeometry(0.011, 0.03, 3, 6);
+const germ = () => { const g = new THREE.Group(); const m = new THREE.Mesh(germG, new THREE.MeshBasicMaterial({ color: RD, toneMapped: false, transparent: true })); g.add(m); const s = glowSprite('rgba(255,59,92,1)', 0.09, 0.7); g.add(s); g.userData = { m, s }; return g; };
+const setGerm = (g, a, sc = 1) => { g.visible = a > 0.01; g.userData.m.material.opacity = a; g.userData.s.material.opacity = 0.7 * a; g.scale.setScalar(sc); };
+const NG = 34, GERMS = [];
+for (let i = 0; i < NG; i++) { const y = -0.04 + rnd() * 0.33, a = (rnd() - 0.5) * 2.6, r = rAt(y) + 0.006; const g = germ(); g.position.set(Math.sin(a) * r, y, Math.cos(a) * r); g.rotation.set(rnd() * 6, rnd() * 6, rnd() * 6); ck.add(g); GERMS.push({ g, ph: rnd() * 6.28, die: rnd() }); }
+
+// ---------- water stream ----------
+const streamM = new THREE.MeshBasicMaterial({ color: CY, transparent: true, opacity: 0.35, toneMapped: false, blending: THREE.AdditiveBlending, depthWrite: false });
+const stream = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.03, 1, 10, 1, true), streamM); scene.add(stream);
+const FLOW = []; for (let i = 0; i < 14; i++) { const s = glowSprite('rgba(120,240,255,1)', 0.07, 0); scene.add(s); FLOW.push({ s, k: i / 14 }); }
+const RUN = []; for (let i = 0; i < 10; i++) { const s = glowSprite('rgba(120,240,255,1)', 0.06, 0); scene.add(s); RUN.push({ s, k: i / 10, x: (rnd() - 0.5) * 0.12 }); }
+
+// ---------- splash droplets carrying germs ----------
+const ND = 36, DROPS = [];
+const tgt = kind => kind === 0 ? V(PX - 0.35 + rnd() * 0.75, rnd() < 0.5 ? CT - 0.39 : CT - 0.05 - rnd() * 0.25, rnd() < 0.5 ? -0.38 : 0.38)
+  : kind === 1 ? (rnd() < 0.6 ? V(PX + 0.52 + rnd() * 0.12, CT + 0.005, -0.3 + rnd() * 0.65) : V(PX - 0.95 + rnd() * 0.42, CT + 0.005, -0.3 + rnd() * 0.65))
+  : V(BOWL.x + (rnd() - 0.5) * 0.18, BOWL.y + 0.17 + rnd() * 0.03, BOWL.z + (rnd() - 0.5) * 0.14);
+for (let i = 0; i < ND; i++) { // kinds: 0 sink, 1 counter, 2 food. a hook burst (counter + food) lands in the first second.
+  let kind, tl; if (i < 8) { kind = i % 2 ? 2 : 1; tl = -0.4 + i * 0.12; } else { kind = (i - 8) % 3; tl = 0.9 + (i - 8) / (ND - 8) * 6.6; }
+  const wm = glowSprite('rgba(120,240,255,1)', 0.1, 0); scene.add(wm); const g = germ(); scene.add(g);
+  DROPS.push({ kind, tl, wm, g, to: tgt(kind), h: 0.25 + rnd() * 0.3, dur: 0.45 + rnd() * 0.2, off: V((rnd() - 0.5) * 0.08, rnd() * 0.05, (rnd() - 0.5) * 0.08) }); }
+
+// ---------- pan + heat ----------
+const pan = new THREE.Group(); pan.position.set(PX, CT - 0.04, 0.05); scene.add(pan);
+const panG = new THREE.CylinderGeometry(0.5, 0.44, 0.08, 40, 1, true); const panM = glass(0.4, '#1a1440', '#2a1a40'); pan.add(new THREE.Mesh(panG, panM));
+const panE = edge(new THREE.CylinderGeometry(0.5, 0.44, 0.08, 40), AM, 0.8); pan.add(panE);
+const handle = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.035, 0.07), glass(0.5, '#1a1440')); handle.position.set(-0.75, 0.03, 0); pan.add(handle); const hE = edge(handle.geometry, AM, 0.6); hE.position.copy(handle.position); pan.add(hE);
+const HEAT = []; for (let i = 0; i < 12; i++) { const s = glowSprite('rgba(255,170,60,1)', 0.25, 0); scene.add(s); HEAT.push({ s, k: i / 12, x: (rnd() - 0.5) * 0.7, z: (rnd() - 0.5) * 0.4 }); }
+const panGlow = glowSprite('rgba(255,150,50,1)', 1.6, 0); scene.add(panGlow);
+
+// ---------- thermometer ----------
+const th = new THREE.Group(); scene.add(th); const dialG = new THREE.Group(); scene.add(dialG);
+{ const pm = new THREE.MeshStandardMaterial({ color: '#dfe6ff', metalness: 0.8, roughness: 0.25, emissive: '#3a4580', emissiveIntensity: 0.6 });
+  const probe = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.4, 10), pm); probe.position.y = 0.2; th.add(probe);
+  const tip = glowSprite('rgba(62,230,255,1)', 0.08, 0.9); th.add(tip);
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.05, 40), glass(0.7, '#141a52')); body.rotation.x = Math.PI / 2; dialG.add(body);
+  const be = edge(new THREE.CylinderGeometry(0.2, 0.2, 0.05, 40), CY, 0.8); be.rotation.x = Math.PI / 2; dialG.add(be); }
+const DIAL = canvasTex(256, 256);
+const dial = new THREE.Mesh(new THREE.CircleGeometry(0.19, 40), new THREE.MeshBasicMaterial({ map: DIAL.tex, transparent: true, toneMapped: false })); dial.position.set(0, 0, 0.03); dialG.add(dial);
+function drawDial(v, ok) { const x = DIAL.x; x.clearRect(0, 0, 256, 256); x.fillStyle = '#070b26'; x.beginPath(); x.arc(128, 128, 124, 0, 7); x.fill();
+  x.strokeStyle = 'rgba(255,255,255,0.15)'; x.lineWidth = 16; x.beginPath(); x.arc(128, 128, 104, 0.75 * Math.PI, 2.25 * Math.PI); x.stroke();
+  x.strokeStyle = ok ? CY : AM; x.beginPath(); x.arc(128, 128, 104, 0.75 * Math.PI, 0.75 * Math.PI + 1.5 * Math.PI * clamp(v / 74)); x.stroke();
+  x.fillStyle = ok ? CY : AM; x.font = '700 84px Poppins'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(String(v), 128, 122); x.font = '700 34px Poppins'; x.fillStyle = '#ffffff'; x.fillText('°C', 128, 185); DIAL.tex.needsUpdate = true; }
+
+// ---------- beats ----------
+installTimeline((wt, L) => ({
+  germs: wt(0, 'germs'), spreads: wt(0, 'spreads'),
+  l2: L[1].start, tap: wt(1, 'Tap'), doesnt: wt(1, 'doesn'), kill: wt(1, 'kill'), bact: wt(1, 'bacteria'),
+  l3: L[2].start, splash: wt(2, 'splashes'), sink: wt(2, 'sink'), counter: wt(2, 'counter'), food: wt(2, 'food'),
+  l4: L[3].start, heat: wt(3, 'Cooking'), kills4: wt(3, 'kills'), c74: wt(3, 'Seventy'), cel: wt(3, 'Celsius'), f165: wt(3, 'one'), fahr: wt(3, 'Fahrenheit'),
+  l5: L[4].start, thick: wt(4, 'thickest'), part: wt(4, 'part'), thermo: wt(4, 'thermometer'),
+  l6: L[5].start, dont: wt(5, 'Don'), wash6: wt(5, 'wash'), cook: wt(5, 'Cook'),
+  slam: L[0].end + 0.06,
+}), () => { build(); });
+window.shotTimes = () => { const c = [0, B.slam, B.l3, B.l4, B.l5, B.l6, B.sig, B.end]; return c.slice(0, -1).map((x, i) => ['s' + i, x, c[i + 1]]); };
+
+let CK = [];
+function build() {
+  const F0 = [PX + 0.2, 0.98, 0], MEAT2 = [PX - 0.04, 1.1, 0], PAN = [PX, 0.9, 0];
+  CK = [
+    [-0.2, [PX + 0.2, 1.22, 3.1], [PX + 0.12, 1.06, 0]],
+    [B.slam - 0.05, [PX + 0.3, 1.18, 2.85], [PX + 0.12, 1.06, 0]],
+    [B.slam + 0.4, [PX + 0.3, 1.2, 1.65], MEAT2, 'whip'],
+    [B.l3 - 0.05, [PX + 0.12, 1.18, 1.5], MEAT2],
+    [B.l3 + 0.4, [PX + 0.2, 1.5, 3.0], [PX + 0.25, 1.1, 0], 'whip'],
+    [B.l4 - 0.1, [PX + 0.4, 1.45, 2.85], [PX + 0.3, 1.1, 0]],
+    [B.l4 + 0.4, [PX - 0.2, 1.4, 2.7], PAN, 'whip'],
+    [B.l5 - 0.1, [PX + 0.2, 1.35, 2.55], PAN],
+    [B.l5 + 0.4, [PX + 0.3, 1.35, 2.4], [PX + 0.12, 1.1, 0], 'whip'],
+    [B.thermo - 0.1, [PX + 0.25, 1.35, 2.3], [PX + 0.12, 1.1, 0]],
+    [B.thermo + 0.3, [PX + 0.22, 1.3, 2.05], [PX + 0.12, 1.12, 0], 'whip'],
+    [B.l6 - 0.1, [PX + 0.2, 1.3, 2.0], [PX + 0.12, 1.12, 0]],
+    [B.l6 + 0.4, [PX - 0.4, 1.35, 3.3], [PX - 0.25, 0.9, 0], 'whip'],
+    [B.sig - 0.05, [PX - 0.35, 1.4, 3.1], [PX - 0.25, 0.92, 0]],
+    [B.sig + 0.5, [PX - 0.1, 1.25, 2.4], F0, 'whip'],
+    [B.end + 1, [PX - 0.1, 1.25, 2.35], F0],
+  ]; }
+
+// ---------- state ----------
+const cRaw = new THREE.Color('#ff8fa8'), cCook = new THREE.Color('#ffb45a'), eRaw = new THREE.Color('#4a1024'), eCook = new THREE.Color('#6a3006');
+const tmp = new THREE.Vector3();
+function props(t) {
+  // kitchen out, pan in at L4
+  const kA = 1 - seg(t, B.l4 - 0.05, 0.35); kitchen.visible = kA > 0.01; kMats.forEach(([m, op]) => m.opacity = op * kA);
+  const pA = seg(t, B.l4, 0.35); pan.visible = pA > 0.01; panM.opacity = 0.4 * pA; panE.material.opacity = 0.8 * pA; hE.material.opacity = 0.6 * pA; handle.material.opacity = 0.5 * pA; pan.position.y = CT - 0.04 - 0.3 * (1 - eo(pA));
+  // state colours on the kitchen
+  const sR = seg(t, B.sink - 0.1, 0.2), cR = Math.max(seg(t, 0.35, 0.2) * (1 - seg(t, 1.4, 0.4)), seg(t, B.counter - 0.1, 0.2)), fR = Math.max(seg(t, 0.55, 0.2) * (1 - seg(t, 1.4, 0.4)), seg(t, B.food - 0.1, 0.2));
+  sinkE.material.color.set(PU).lerp(new THREE.Color(RD), sR); [cntR, cntL].forEach(e => e.material.color.set(PU).lerp(new THREE.Color(RD), cR)); bowlE.material.color.set(PU).lerp(new THREE.Color(RD), fR);
+  leafM.emissive.set('#1e6b2a').lerp(new THREE.Color('#6b1020'), fR * 0.6);
+  // drumstick: under the tap, then into the pan
+  const toPan = eio(seg(t, B.l4 - 0.05, 0.6));
+  ck.position.set(lerp(PX - 0.15, PX - 0.02, toPan), lerp(1.0, CT + 0.21, toPan) + 0.012 * Math.sin(t * 1.4) * (1 - toPan), lerp(0.02, 0.05, toPan));
+  ck.rotation.set(lerp(0.15, -0.25, toPan), 0.4 * Math.sin(t * 0.5) * (1 - toPan) + 0.2 * toPan, lerp(-0.9, -1.57, toPan));
+  const cook = eio(seg(t, B.heat, B.fahr - B.heat + 0.8)); ckM.color.lerpColors(cRaw, cCook, cook); ckM.emissive.lerpColors(eRaw, eCook, cook); ckE.material.color.set('#ffb3c4').lerp(new THREE.Color(AM), cook);
+  // germs on the meat: wiggle; heat kills them one by one
+  GERMS.forEach((g, i) => { const kt = B.heat + 0.1 + g.die * (B.fahr - B.heat - 0.3); const k = seg(t, kt, 0.15); g.g.rotation.z += 0; g.g.userData.m.rotation.set(Math.sin(t * 3 + g.ph) * 0.6, 0, Math.cos(t * 2.3 + g.ph) * 0.6);
+    setGerm(g.g, 1 - k, (1 + 0.12 * Math.sin(t * 6 + g.ph)) * (1 - 0.7 * k) * (1 + 0.6 * Math.exp(-Math.max(0, t - B.bact) * 4) * (t > B.bact ? 1 : 0))); });
+  // water stream (on until L4)
+  const wA = 1 - seg(t, B.l4 - 0.15, 0.25); const IMP = V(PX - 0.05, 1.18, 0.02); ck.localToWorld(tmp.set(0, 0.18, 0.12));
+  const imp = IMP; const len = SPOUT.y - imp.y; stream.position.set(SPOUT.x, SPOUT.y - len / 2, SPOUT.z); stream.scale.set(1, len, 1); streamM.opacity = 0.35 * wA; stream.visible = wA > 0.01;
+  FLOW.forEach(f => { const ph = (f.k + t * 2.2) % 1; f.s.position.set(SPOUT.x + 0.006 * Math.sin(f.k * 40), lerp(SPOUT.y, imp.y, ph), SPOUT.z); f.s.material.opacity = 0.9 * wA; f.s.scale.setScalar(0.07); });
+  RUN.forEach(r => { const ph = (r.k + t * 1.6) % 1; r.s.position.set(imp.x + 0.18 + r.x + ph * 0.05, lerp(imp.y - 0.12, CT - 0.38, ph * ph), 0.1); r.s.material.opacity = 0.7 * wA * (1 - kA * 0 ); r.s.scale.setScalar(0.06); });
+  // splash droplets
+  DROPS.forEach(d => { const u = (t - d.tl) / d.dur; const from = imp.clone().add(d.off);
+    if (u < 0 || t > B.l4 + 0.2) { d.wm.material.opacity = 0; setGerm(d.g, 0); return; }
+    const p = u < 1 ? from.clone().lerp(d.to, u).add(V(0, d.h * 4 * u * (1 - u), 0)) : d.to.clone();
+    d.wm.position.copy(p); d.wm.material.opacity = u < 1 ? 0.85 : 0.85 * (1 - clamp((u - 1) * 3)); d.wm.scale.set(0.11 * (u < 1 ? 1 : 1 + clamp(u - 1) * 0.8), 0.11 * (u < 1 ? 1 : 1 - clamp((u - 1) * 2) * 0.6), 1);
+    d.g.position.copy(p); d.g.rotation.set(t * 3, d.h * 10, 0); setGerm(d.g, kA, (u > 1 ? 1.8 : 1.2) + (u > 1 && u < 1.6 ? 0.6 * Math.sin((u - 1) * Math.PI / 0.6) : 0)); });
+  // heat under the pan
+  const hA = clamp(seg(t, B.heat - 0.15, 0.3)) * (1 - seg(t, B.sig, 0.3)); panGlow.position.set(PX, CT - 0.08, 0.05); panGlow.material.opacity = 0.55 * hA;
+  HEAT.forEach(h => { const ph = (h.k + t * 0.8) % 1; h.s.position.set(PX + h.x, CT - 0.12 + ph * 0.55, 0.05 + h.z); h.s.material.opacity = 0.6 * hA * Math.sin(ph * Math.PI); h.s.scale.setScalar(0.22 * (1 - 0.5 * ph)); });
+  // thermometer
+  const tA = seg(t, B.l5 - 0.1, 0.3); const tOut = 1 - seg(t, B.l6 - 0.05, 0.25); th.visible = tA * tOut > 0.01; th.scale.setScalar(Math.max(0.01, tOut)); dialG.visible = th.visible; const ins = eio(seg(t, B.thick - 0.1, 0.45));
+  const T0 = new THREE.Vector3(); ck.localToWorld(T0.set(0, 0.13, 0)); const dir = V(0.1, 0.75, 0.6).normalize();
+  th.position.copy(T0).addScaledVector(dir, 0.12 + (1 - ins) * 0.5); th.quaternion.setFromUnitVectors(V(0, 1, 0), dir);
+  th.updateMatrixWorld(); th.localToWorld(dialG.position.set(0, 0.36, 0)); dialG.quaternion.copy(cam.quaternion); dialG.scale.setScalar(Math.max(0.01, tOut)); if (th.visible) { const v = Math.round(lerp(4, 74, eo(seg(t, B.part, B.thermo - B.part + 0.5)))); drawDial(v, v >= 74); }
+  guy.root.visible = t < B.l2 + 0.1 || t > B.l6 + 0.3;
+  const mood = t < B.slam ? 'surprised' : t > B.l6 ? 'happy' : 'neutral';
+  const pose = t < B.slam ? 'surprised' : t > B.cook ? 'point' : 'idle';
+  guy.update(t, { pose, mood, headTurn: 0 });
+}
+
+// ---------- type ----------
+function drawType(t) {
+  { const g = ui.createLinearGradient(0, 0, 0, 760); g.addColorStop(0, 'rgba(2,3,12,0.65)'); g.addColorStop(1, 'rgba(2,3,12,0)'); ui.fillStyle = g; ui.fillRect(0, 0, W, 760); }
+  if (t < B.slam + 0.22) { const bl = seg(t, B.slam, 0.2); ui.save(); ui.translate(540, 450); const s0 = (1 + 0.02 * Math.sin(t * 5)) * (1 + bl * 0.5); ui.scale(s0, s0); ui.translate(-540, -450); ui.globalAlpha = 1 - bl;
+    const o = { from: 1.0 }, kick = t > B.germs ? Math.exp(-(t - B.germs) * 8) : 0;
+    line([['WASHING', -1, '#ffffff'], ['RAW', -1, '#ffffff']], 300, 150, 5, o);
+    line([['CHICKEN?', -1, '#ffb3c4']], 460, 165, 5, o);
+    ui.save(); ui.translate(540, 640); ui.scale(1 + 0.15 * kick, 1 + 0.15 * kick); ui.translate(-540, -640); line([['IT', -1], ['SPREADS', -1, RD], ['GERMS.', -1, RD]], 640, 125, 5, o); ui.restore(); ui.restore(); }
+  if (t > B.tap - 0.05 && t < B.l3 + 0.02) { const o = { a: clamp((B.l3 + 0.02 - t) / 0.14) }; line([['TAP', B.tap - 0.05, CY], ['WATER', B.tap - 0.05, CY]], 300, 140, t, o); line([["DOESN'T", B.doesnt - 0.05, '#ffffff'], ['KILL', B.kill - 0.05, RD]], 450, 130, t, o); line([['GERMS', B.bact - 0.05, RD]], 600, 130, t, o); }
+  if (t > B.splash - 0.05 && t < B.l4 + 0.02) { const o = { a: clamp((B.l4 + 0.02 - t) / 0.14) }; line([['IT', B.splash - 0.05, '#ffffff'], ['SPLASHES', B.splash - 0.05, CY]], 300, 130, t, o);
+    line([['SINK.', B.sink - 0.05, RD], ['COUNTER.', B.counter - 0.05, RD], ['FOOD.', B.food - 0.05, RD]], 450, 110, t, o); }
+  if (t > B.l4 - 0.05 && t < B.l5 + 0.02) { const o = { a: clamp((B.l5 + 0.02 - t) / 0.14) }; line([['COOKING', B.heat - 0.05, AM], ['KILLS', B.kills4 - 0.05, '#ffffff']], 300, 140, t, o);
+    if (t > B.c74 - 0.05) { const v = Math.round(74 * eo(clamp((t - B.c74 + 0.05) / 0.4))); line([[String(v).padStart(2, '0') + '°C', B.c74 - 0.05, AM]], 470, 150, t, o); }
+    line([['165°F', B.f165 - 0.05, '#c8ceff']], 610, 110, t, o); }
+  if (t > B.l5 - 0.05 && t < B.l6 + 0.02) { const o = { a: clamp((B.l6 + 0.02 - t) / 0.14) }; line([['CHECK THE', B.l5 - 0.05, '#ffffff']], 300, 120, t, o); line([['THICKEST', B.thick - 0.05, AM], ['PART', B.part - 0.05, AM]], 440, 140, t, o); }
+  if (t > B.l6 - 0.05 && t < B.sig + 0.25) { const o = { a: clamp((B.sig + 0.25 - t) / 0.15) }; line([["DON'T", B.l6 - 0.05, '#ffffff'], ['WASH IT.', B.wash6 - 0.05, RD]], 310, 130, t, o); line([['COOK', B.cook - 0.05, AM], ['IT.', B.cook - 0.05, AM]], 500, 190, t, o); }
+  const fa = (t < B.sig) ? (1 - seg(t, B.sig - 0.2, 0.2)) : 0; if (fa > 0) { ui.save(); ui.globalAlpha = 0.5 * fa; ui.fillStyle = '#02030c'; ui.beginPath(); ui.roundRect(60, 1432, 960, 62, 31); ui.fill(); ui.restore(); }
+  foot('Illustrative model · Sources: USDA FSIS, Health Canada', fa * 1.25, 1475);
+}
+
+// ---------- sound cue sheet (clean tonal only) ----------
+window.getEvents = () => { const { ev, done } = eventsHelper();
+  ev(0.0, 'swish', 1.0); ev(0.35, 'pop', 0.8); ev(0.55, 'pop2', 0.8); ev(B.germs - 0.03, 'slam', 1.1); ev(B.slam, 'whoosh', 1);
+  ev(B.tap - 0.05, 'click', 0.6); ev(B.kill - 0.05, 'slam', 0.9);
+  ev(B.l3 + 0.05, 'whoosh', 0.9); ev(B.sink - 0.05, 'pop', 0.8); ev(B.counter - 0.05, 'pop', 0.8); ev(B.food - 0.05, 'pop2', 0.9);
+  ev(B.l4 + 0.1, 'whoosh', 0.9); ev(B.heat - 0.05, 'swish', 0.8); ev(B.c74 - 0.05, 'ping', 0.9); ev(B.f165 - 0.05, 'ping', 0.8);
+  ev(B.l5 + 0.1, 'whoosh', 0.9); ev(B.thick - 0.05, 'click', 0.7); ev(B.thermo + 0.2, 'ping', 0.9);
+  ev(B.l6 - 0.05, 'card', 0.8); ev(B.wash6 - 0.05, 'tick', 0.7); ev(B.cook - 0.05, 'slam', 1.0);
+  sigEvents(ev); return done(); };
+
+window.renderAt = t => {
+  camAt(t, CK, { shakes: [B.germs, B.kill, B.cook] }); props(t);
+  bloom.strength = 0.6 + (t > B.germs ? 0.4 * Math.exp(-(t - B.germs) * 7) : 0);
+  composer.render(); ui.clearRect(0, 0, W, H); drawType(t); signature(t, '', RD); note('Illustrative model · Sources: USDA FSIS, Health Canada', 1440, 0.75 * clamp((t - B.sig - 0.38) / 0.18)); filmLook(t); return 'f';
+};
+window.ready = Promise.resolve(true);
+</script></body></html>
